@@ -56,6 +56,9 @@ public class CustomDatabaseBackupContributor : IBackupContributor
         var context = await _customDbProvider.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using (context.ConfigureAwait(false))
         {
+            // A restore runs before the regular startup migration, so the fork tables may not exist yet.
+            await context.Database.MigrateAsync(cancellationToken).ConfigureAwait(false);
+
             var configurations = await ReadEntryAsync<CustomHomeRowConfiguration>(archive, ConfigurationsEntryName, cancellationToken).ConfigureAwait(false);
             if (configurations is not null)
             {

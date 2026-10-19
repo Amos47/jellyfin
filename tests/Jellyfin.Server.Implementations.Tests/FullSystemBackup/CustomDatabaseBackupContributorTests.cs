@@ -30,10 +30,10 @@ public sealed class CustomDatabaseBackupContributorTests : SqliteDbTestFixture
     {
         _customConnection = new SqliteConnection("Data Source=:memory:");
         _customConnection.Open();
-        _customOptions = new DbContextOptionsBuilder<CustomDbContext>().UseSqlite(_customConnection).Options;
+        _customOptions = CreateOptions(_customConnection);
         using (var context = new CustomDbContext(_customOptions))
         {
-            context.Database.EnsureCreated();
+            context.Database.Migrate();
         }
 
         var customFactory = new Mock<IDbContextFactory<CustomDbContext>>();
@@ -138,6 +138,60 @@ public sealed class CustomDatabaseBackupContributorTests : SqliteDbTestFixture
         Assert.Equal(newUser, def.ModifiedByUserId);
     }
 
+    [Fact]
+    public async Task Restore_OnUnmigratedCustomDatabase_MigratesThenRestores()
+    {
+        using var connection = new SqliteConnection("Data Source=:memory:");
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        var options = CreateOptions(connection);
+        var factory = new Mock<IDbContextFactory<CustomDbContext>>();
+        factory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new CustomDbContext(options));
+        var contributor = new CustomDatabaseBackupContributor(factory.Object, CreateDbContextFactory());
+        var userId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+
+        using var withEntries = new MemoryStream();
+        using (var archive = new ZipArchive(withEntries, ZipArchiveMode.Create, true))
+        {
+            await WriteEntryAsync(archive, ConfigurationsEntry, new[] { new CustomHomeRowConfiguration { UserId = userId, RowsJson = "z", DateModified = now } });
+            await WriteEntryAsync(archive, DefaultsEntry, new[] { new CustomHomeRowDefault { RowsJson = "z", DateModified = now, ModifiedByUserId = userId } });
+        }
+
+        withEntries.Position = 0;
+        using (var archive = new ZipArchive(withEntries, ZipArchiveMode.Read))
+        {
+            await contributor.RestoreAsync(archive, TestContext.Current.CancellationToken);
+        }
+
+        await using (var context = new CustomDbContext(options))
+        {
+            Assert.Equal("z", Assert.Single(await context.HomeRowConfigurations.ToListAsync(TestContext.Current.CancellationToken)).RowsJson);
+            Assert.Equal("z", Assert.Single(await context.HomeRowDefaults.ToListAsync(TestContext.Current.CancellationToken)).RowsJson);
+        }
+
+        // No-Custom-entries path on another unmigrated database must not throw.
+        using var connection2 = new SqliteConnection("Data Source=:memory:");
+        await connection2.OpenAsync(TestContext.Current.CancellationToken);
+        var options2 = CreateOptions(connection2);
+        factory.Setup(f => f.CreateDbContextAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => new CustomDbContext(options2));
+        using var empty = new MemoryStream();
+        using (var archive = new ZipArchive(empty, ZipArchiveMode.Create, true))
+        {
+            archive.CreateEntry("manifest.json");
+        }
+
+        empty.Position = 0;
+        using (var archive = new ZipArchive(empty, ZipArchiveMode.Read))
+        {
+            await contributor.RestoreAsync(archive, TestContext.Current.CancellationToken);
+        }
+
+        await using var context2 = new CustomDbContext(options2);
+        Assert.Empty(await context2.HomeRowConfigurations.ToListAsync(TestContext.Current.CancellationToken));
+    }
+
     protected override void Dispose(bool disposing)
     {
         if (disposing)
@@ -147,6 +201,14 @@ public sealed class CustomDatabaseBackupContributorTests : SqliteDbTestFixture
 
         base.Dispose(disposing);
     }
+
+    private static DbContextOptions<CustomDbContext> CreateOptions(SqliteConnection connection)
+        => new DbContextOptionsBuilder<CustomDbContext>()
+            .UseSqlite(
+                connection,
+                o => o.MigrationsAssembly(typeof(CustomDbContext).Assembly)
+                    .MigrationsHistoryTable(CustomDbContext.MigrationsHistoryTableName))
+            .Options;
 
     private static async Task WriteEntryAsync<T>(ZipArchive archive, string name, T value)
     {
