@@ -12,6 +12,7 @@ using Jellyfin.Server.Implementations.Activity;
 using Jellyfin.Server.Implementations.Devices;
 using Jellyfin.Server.Implementations.Events;
 using Jellyfin.Server.Implementations.Extensions;
+using Jellyfin.Server.Implementations.FullSystemBackup;
 using Jellyfin.Server.Implementations.Security;
 using Jellyfin.Server.Implementations.Trickplay;
 using Jellyfin.Server.Implementations.Users;
@@ -78,6 +79,7 @@ namespace Jellyfin.Server
             serviceCollection.AddEventServices();
             serviceCollection.AddSingleton<IBaseItemManager, BaseItemManager>();
             serviceCollection.AddSingleton<IEventManager, EventManager>();
+            serviceCollection.AddSingleton<IBackupContributor, CustomDatabaseBackupContributor>();
 
             serviceCollection.AddSingleton<IActivityManager, ActivityManager>();
             serviceCollection.AddSingleton<IUserManager, UserManager>();
