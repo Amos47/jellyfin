@@ -7,6 +7,7 @@ using Emby.Server.Implementations;
 using Emby.Server.Implementations.Configuration;
 using Emby.Server.Implementations.Serialization;
 using Jellyfin.Database.Implementations;
+using Jellyfin.Database.Providers.Sqlite;
 using Jellyfin.Server.Implementations.DatabaseConfiguration;
 using Jellyfin.Server.Implementations.Extensions;
 using Jellyfin.Server.Migrations;
@@ -48,7 +49,7 @@ public sealed class JellyfinMigrationServiceTests : IDisposable
         Directory.CreateDirectory(_paths.CachePath);
     }
 
-    private string DatabasePath => Path.Combine(_paths.DataPath, "jellyfin.db");
+    private string DatabasePath => Path.Combine(_paths.DataPath, ForkedDatabase.FileName);
 
     [Fact]
     public async Task CheckFirstTimeRunOrMigration_SetUpServerWithoutDatabase_ThrowsWithoutCreatingIt()
@@ -61,7 +62,7 @@ public sealed class JellyfinMigrationServiceTests : IDisposable
 
         Assert.Contains("the database does not exist", exception.Message, StringComparison.Ordinal);
         Assert.Contains(_paths.SystemConfigurationFilePath, exception.Message, StringComparison.Ordinal);
-        Assert.Empty(Directory.GetFiles(_paths.DataPath, "jellyfin.db*"));
+        Assert.Empty(Directory.GetFiles(_paths.DataPath, $"{ForkedDatabase.FileName}*"));
         Assert.Equal(systemConfiguration, await File.ReadAllBytesAsync(_paths.SystemConfigurationFilePath, TestContext.Current.CancellationToken));
     }
 

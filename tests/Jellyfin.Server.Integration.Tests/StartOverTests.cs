@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Emby.Server.Implementations.Serialization;
 using Jellyfin.Api.Models.StartupDtos;
 using Jellyfin.Database.Implementations;
+using Jellyfin.Database.Providers.Sqlite;
 using Jellyfin.Extensions.Json;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Model.Configuration;
@@ -58,7 +59,7 @@ public sealed class StartOverTests : IDisposable
         var guard = exception as InvalidOperationException ?? exception.InnerException as InvalidOperationException;
         Assert.NotNull(guard);
         Assert.Contains("the database does not exist", guard.Message, StringComparison.Ordinal);
-        Assert.Empty(Directory.GetFiles(paths.DataPath, "jellyfin.db*"));
+        Assert.Empty(Directory.GetFiles(paths.DataPath, $"{ForkedDatabase.FileName}*"));
         Assert.Equal(systemConfiguration, await File.ReadAllBytesAsync(paths.SystemConfigurationFilePath, TestContext.Current.CancellationToken));
     }
 
@@ -107,7 +108,7 @@ public sealed class StartOverTests : IDisposable
         // it is deleted below, so the flag is set on the stopped server instead.
         SetWizardCompleted(paths, true);
         SqliteConnection.ClearAllPools();
-        foreach (var file in Directory.GetFiles(paths.DataPath, "jellyfin.db*"))
+        foreach (var file in Directory.GetFiles(paths.DataPath, $"{ForkedDatabase.FileName}*"))
         {
             File.Delete(file);
         }
