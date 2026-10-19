@@ -7,6 +7,7 @@ using Jellyfin.Api.WebSocketListeners;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Drawing;
 using Jellyfin.Drawing.Skia;
+using Jellyfin.HomeRows;
 using Jellyfin.LiveTv;
 using Jellyfin.Server.Implementations.Activity;
 using Jellyfin.Server.Implementations.Devices;
@@ -109,6 +110,8 @@ namespace Jellyfin.Server
             {
                 serviceCollection.AddSingleton(typeof(ILyricParser), type);
             }
+
+            serviceCollection.AddHomeRows();
 
             base.RegisterServices(serviceCollection);
         }
