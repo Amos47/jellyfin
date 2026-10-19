@@ -74,6 +74,13 @@ public static class ForkedDatabase
         var tempWal = tempPath + "-wal";
         var sourceWal = sourcePath + "-wal";
 
+        // The fork database is known to be absent here, so any sidecar next to it is stale and must not be
+        // replayed onto the new copy.
+        foreach (var stale in new[] { forkPath + "-wal", forkPath + "-shm", tempPath, tempWal })
+        {
+            File.Delete(stale);
+        }
+
         File.Copy(sourcePath, tempPath, true);
         if (File.Exists(sourceWal))
         {

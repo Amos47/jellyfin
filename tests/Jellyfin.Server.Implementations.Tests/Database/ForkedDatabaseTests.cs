@@ -101,6 +101,29 @@ public sealed class ForkedDatabaseTests : IDisposable
             Times.Once);
     }
 
+    [Fact]
+    public void Prepare_StaleForkWalAndTempFiles_AreRemovedBeforeCopy()
+    {
+        var other = Path.Combine(_dir, "other.db");
+        using (var otherConnection = CreateDb(other, true))
+        {
+            File.Copy(other + "-wal", Fork + "-wal");
+        }
+
+        File.WriteAllText(Fork + "-shm", "stale");
+        File.WriteAllText(Fork + ".tmp", "stale");
+        File.WriteAllText(Fork + ".tmp-wal", "stale");
+        CreateDb(Source, false);
+
+        ForkedDatabase.Prepare(_dir, _logger.Object);
+
+        Assert.False(File.Exists(Fork + "-wal"));
+        Assert.False(File.Exists(Fork + "-shm"));
+        Assert.False(File.Exists(Fork + ".tmp"));
+        Assert.False(File.Exists(Fork + ".tmp-wal"));
+        Assert.Equal(1, CountRows(Fork));
+    }
+
     private static SqliteConnection CreateDb(string path, bool wal)
     {
         var connection = new SqliteConnection($"Data Source={path};Pooling=False");
