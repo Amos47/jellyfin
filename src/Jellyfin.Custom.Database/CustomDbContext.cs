@@ -34,6 +34,7 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
         {
             entity.ToTable("CustomHomeRowConfigurations");
             entity.HasKey(e => e.UserId);
+            entity.Property(e => e.UserId).ValueGeneratedNever();
         });
 
         modelBuilder.Entity<CustomHomeRowDefault>(entity =>

@@ -20,7 +20,6 @@ namespace Jellyfin.Custom.Database.Migrations
             modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomHomeRowConfiguration", b =>
                 {
                     b.Property<Guid>("UserId")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("DateModified")

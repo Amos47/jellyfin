@@ -11,7 +11,7 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace Jellyfin.Custom.Database.Migrations
 {
     [DbContext(typeof(CustomDbContext))]
-    [Migration("20261019233547_InitialCustomSchema")]
+    [Migration("20261019233903_InitialCustomSchema")]
     partial class InitialCustomSchema
     {
         /// <inheritdoc />
@@ -23,7 +23,6 @@ namespace Jellyfin.Custom.Database.Migrations
             modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomHomeRowConfiguration", b =>
                 {
                     b.Property<Guid>("UserId")
-                        .ValueGeneratedOnAdd()
                         .HasColumnType("TEXT");
 
                     b.Property<DateTime>("DateModified")
