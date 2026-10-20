@@ -63,7 +63,7 @@ public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
 
         var sqliteConnectionBuilder = new SqliteConnectionStringBuilder
         {
-            DataSource = GetOption(customOptions, "path", e => e, () => ForkedDatabase.Prepare(_applicationPaths.DataPath, _logger)),
+            DataSource = GetOption(customOptions, "path", e => ForkedDatabase.ResolveConfiguredPath(e, _logger), () => ForkedDatabase.Prepare(_applicationPaths.DataPath, _logger)),
             // Private, not Default: sqlite3_enable_shared_cache is process-global, so a plugin
             // enabling it makes these connections share a cache too. Contention then surfaces as
             // SQLITE_LOCKED ("database table is locked"), which the busy handler does not cover,

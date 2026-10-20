@@ -94,6 +94,34 @@ public static class ForkedDatabase
         return forkPath;
     }
 
+    /// <summary>
+    /// Resolves a database path taken from the configuration. A path that points at the official database file is
+    /// redirected to the fork's database in the same directory, so the official file is never opened.
+    /// </summary>
+    /// <param name="configuredPath">The configured database path.</param>
+    /// <param name="logger">A logger.</param>
+    /// <returns>The path to open.</returns>
+    public static string ResolveConfiguredPath(string configuredPath, ILogger logger)
+    {
+        if (!string.Equals(Path.GetFileName(configuredPath), SourceFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            return configuredPath;
+        }
+
+        var directory = Path.GetDirectoryName(configuredPath);
+        if (string.IsNullOrEmpty(directory))
+        {
+            directory = ".";
+        }
+
+        logger.LogWarning(
+            "The configured database path {Path} is the official database; using {Fork} in the same directory instead and never opening {Source}",
+            configuredPath,
+            FileName,
+            SourceFileName);
+        return Prepare(directory, logger);
+    }
+
     private static void WriteMarker(string markerPath)
         => File.WriteAllText(markerPath, DateTime.UtcNow.ToString("O", CultureInfo.InvariantCulture));
 }

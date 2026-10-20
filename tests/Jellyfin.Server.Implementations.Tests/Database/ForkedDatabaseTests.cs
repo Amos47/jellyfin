@@ -124,6 +124,48 @@ public sealed class ForkedDatabaseTests : IDisposable
         Assert.Equal(1, CountRows(Fork));
     }
 
+    [Fact]
+    public void ResolveConfiguredPath_OfficialFileName_ReturnsForkPathAndLeavesSourceUntouched()
+    {
+        CreateDb(Source, false);
+        var bytes = File.ReadAllBytes(Source);
+
+        var result = ForkedDatabase.ResolveConfiguredPath(Source, _logger.Object);
+
+        Assert.Equal(Fork, result);
+        Assert.Equal(1, CountRows(Fork));
+        Assert.Equal(bytes, File.ReadAllBytes(Source));
+        _logger.Verify(
+            l => l.Log(
+                LogLevel.Warning,
+                It.IsAny<EventId>(),
+                It.IsAny<It.IsAnyType>(),
+                It.IsAny<Exception?>(),
+                It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public void ResolveConfiguredPath_OfficialFileNameDifferentCase_ReturnsForkPath()
+    {
+        var upper = Path.Combine(_dir, "JELLYFIN.DB");
+
+        var result = ForkedDatabase.ResolveConfiguredPath(upper, _logger.Object);
+
+        Assert.Equal(Fork, result);
+    }
+
+    [Fact]
+    public void ResolveConfiguredPath_OtherFileName_ReturnsPathUnchanged()
+    {
+        var other = Path.Combine(_dir, "other.db");
+
+        var result = ForkedDatabase.ResolveConfiguredPath(other, _logger.Object);
+
+        Assert.Equal(other, result);
+        Assert.Empty(Directory.GetFileSystemEntries(_dir));
+    }
+
     private static SqliteConnection CreateDb(string path, bool wal)
     {
         var connection = new SqliteConnection($"Data Source={path};Pooling=False");
