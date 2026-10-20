@@ -345,6 +345,24 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ResetAdminDefault_RemovesItAndFallsBackForInheritingUsers()
+    {
+        var service = CreateService();
+        Assert.Empty(await service.SaveAdminDefaultAsync(_admin, [Row(HomeRowProviderIds.NextUp)], Ct));
+        Assert.Empty(await service.SaveUserLayoutAsync(_other, [Row(HomeRowProviderIds.Resume)], Ct));
+        Assert.Equal(HomeRowLayoutSource.AdminDefault, (await service.GetEffectiveLayoutAsync(_user, Ct)).Source);
+
+        await service.ResetAdminDefaultAsync(Ct);
+        await service.ResetAdminDefaultAsync(Ct);
+
+        Assert.Null(await service.GetAdminDefaultAsync(Ct));
+        Assert.NotEqual(HomeRowLayoutSource.AdminDefault, (await service.GetEffectiveLayoutAsync(_user, Ct)).Source);
+        Assert.Equal(HomeRowLayoutSource.User, (await service.GetEffectiveLayoutAsync(_other, Ct)).Source);
+        Assert.Empty(await service.SaveAdminDefaultAsync(_admin, [Row(HomeRowProviderIds.Resume)], Ct));
+        Assert.Single(await service.GetAdminDefaultAsync(Ct) ?? []);
+    }
+
+    [Fact]
     public async Task Read_UnknownProvider_MarkedUnavailableNotRemoved()
     {
         Assert.Empty(await CreateService(includeGone: true).SaveUserLayoutAsync(

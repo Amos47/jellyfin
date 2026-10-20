@@ -229,6 +229,15 @@ public class HomeRowsControllerTests
             Times.Never);
     }
 
+    [Fact]
+    public async Task ResetDefaultConfiguration_DeletesTheAdminDefault()
+    {
+        var result = await _subject.ResetDefaultConfiguration(CancellationToken.None);
+
+        Assert.IsType<NoContentResult>(result);
+        _configurationService.Verify(s => s.ResetAdminDefaultAsync(It.IsAny<CancellationToken>()), Times.Once);
+    }
+
     private Task<ActionResult<HomeRowItemsDto>> GetRowItems(Guid rowId, int startIndex = 0, int limit = 20)
         => _subject.GetRowItems(rowId, [], [], null, null, startIndex, limit, true, CancellationToken.None);
 

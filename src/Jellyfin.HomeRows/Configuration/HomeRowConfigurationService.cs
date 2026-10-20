@@ -208,6 +208,19 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
     }
 
     /// <inheritdoc />
+    public async Task ResetAdminDefaultAsync(CancellationToken ct)
+    {
+        var context = await _dbFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using (context.ConfigureAwait(false))
+        {
+            await context.HomeRowDefaults
+                .Where(d => d.Id == 1)
+                .ExecuteDeleteAsync(ct)
+                .ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<EffectiveHomeRow?> FindRowAsync(User user, Guid rowId, CancellationToken ct)
     {
         var layout = await GetEffectiveLayoutAsync(user, ct).ConfigureAwait(false);

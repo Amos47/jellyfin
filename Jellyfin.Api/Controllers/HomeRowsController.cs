@@ -342,6 +342,22 @@ public class HomeRowsController : BaseJellyfinApiController
         return Ok(ToDtos(rows ?? []));
     }
 
+    /// <summary>
+    /// Deletes the server wide default home row layout. Users without a layout of their own then fall back to their
+    /// upstream home sections, else the standard order.
+    /// </summary>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="204">Default layout deleted.</response>
+    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    [HttpDelete("DefaultConfiguration")]
+    [Authorize(Policy = Policies.RequiresElevation)]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<ActionResult> ResetDefaultConfiguration(CancellationToken cancellationToken)
+    {
+        await _configurationService.ResetAdminDefaultAsync(cancellationToken).ConfigureAwait(false);
+        return NoContent();
+    }
+
     private static HomeRowInstance[] ToInstances(IReadOnlyList<HomeRowInstanceDto> rows)
         => rows.Select(r => new HomeRowInstance(r.Id, r.Provider ?? string.Empty, r.Title, r.Config ?? new JsonObject(), r.Enabled)).ToArray();
 

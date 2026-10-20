@@ -6,6 +6,7 @@ using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
 using Jellyfin.Api.Models.HomeRowDtos;
+using Jellyfin.Api.Models.UserDtos;
 using Jellyfin.Extensions.Json;
 using Jellyfin.HomeRows;
 using Jellyfin.HomeRows.Configuration;
@@ -191,7 +192,7 @@ namespace Jellyfin.Server.Integration.Tests.Controllers
         [Fact]
         public async Task DefaultConfiguration_PutAsAdmin_ThenGetReturnsIt()
         {
-            // A server of its own: an admin default cannot be removed, and would leak into the other tests.
+            // A server of its own: an admin default would leak into the other tests.
             using var factory = new JellyfinApplicationFactory();
             using var client = factory.CreateClient();
             client.DefaultRequestHeaders.AddAuthHeader(await AuthHelper.CompleteStartupAsync(client));
@@ -226,6 +227,55 @@ namespace Jellyfin.Server.Integration.Tests.Controllers
             var configuration = await GetConfigurationAsync(client);
             Assert.Equal(HomeRowLayoutSource.AdminDefault, configuration.Source);
             Assert.Equal(rowId, Assert.Single(configuration.Rows).Id);
+        }
+
+        [Fact]
+        public async Task DefaultConfiguration_Delete_RemovesTheDefaultForAdminsOnly()
+        {
+            using var factory = new JellyfinApplicationFactory();
+            using var client = factory.CreateClient();
+            client.DefaultRequestHeaders.AddAuthHeader(await AuthHelper.CompleteStartupAsync(client));
+
+            HomeRowInstanceDto[] rows =
+            [
+                new HomeRowInstanceDto(Guid.NewGuid(), HomeRowProviderIds.ContinueWatching, "Keep watching", new JsonObject(), true, false)
+            ];
+            using (var put = await client.PutAsJsonAsync("HomeRows/DefaultConfiguration", new HomeRowConfigurationUpdateDto(rows), JsonDefaults.Options, TestContext.Current.CancellationToken))
+            {
+                Assert.Equal(HttpStatusCode.OK, put.StatusCode);
+            }
+
+            Assert.Equal(HomeRowLayoutSource.AdminDefault, (await GetConfigurationAsync(client)).Source);
+
+            // A regular user may not remove it.
+            using (var userClient = factory.CreateClient())
+            {
+                using var create = await client.PostAsJsonAsync("Users/New", new CreateUserByName { Name = "regular", Password = "regular-pw" }, JsonDefaults.Options, TestContext.Current.CancellationToken);
+                create.EnsureSuccessStatusCode();
+                userClient.DefaultRequestHeaders.AddAuthHeader(await AuthenticateAsync(userClient, "regular", "regular-pw"));
+
+                using var forbidden = await userClient.DeleteAsync("HomeRows/DefaultConfiguration", TestContext.Current.CancellationToken);
+                Assert.Equal(HttpStatusCode.Forbidden, forbidden.StatusCode);
+            }
+
+            using (var get = await client.GetAsync("HomeRows/DefaultConfiguration", TestContext.Current.CancellationToken))
+            {
+                Assert.Equal(HttpStatusCode.OK, get.StatusCode);
+            }
+
+            using (var delete = await client.DeleteAsync("HomeRows/DefaultConfiguration", TestContext.Current.CancellationToken))
+            {
+                Assert.Equal(HttpStatusCode.NoContent, delete.StatusCode);
+            }
+
+            using (var none = await client.GetAsync("HomeRows/DefaultConfiguration", TestContext.Current.CancellationToken))
+            {
+                Assert.Equal(HttpStatusCode.NoContent, none.StatusCode);
+            }
+
+            var configuration = await GetConfigurationAsync(client);
+            Assert.NotEqual(HomeRowLayoutSource.AdminDefault, configuration.Source);
+            Assert.Equal(_standardOrder, configuration.Rows.Select(r => r.Provider));
         }
 
         [Fact]
@@ -271,6 +321,17 @@ namespace Jellyfin.Server.Integration.Tests.Controllers
         {
             using var response = await client.DeleteAsync("HomeRows/Configuration", TestContext.Current.CancellationToken);
             Assert.Equal(HttpStatusCode.NoContent, response.StatusCode);
+        }
+
+        private static async Task<string> AuthenticateAsync(HttpClient client, string username, string password)
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Post, "/Users/AuthenticateByName");
+            request.Headers.TryAddWithoutValidation(AuthHelper.AuthHeaderName, AuthHelper.DummyAuthHeader);
+            request.Content = JsonContent.Create(new AuthenticateUserByName { Username = username, Pw = password }, options: JsonDefaults.Options);
+            using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+            response.EnsureSuccessStatusCode();
+            var result = await response.Content.ReadFromJsonAsync<JsonObject>(JsonDefaults.Options, TestContext.Current.CancellationToken);
+            return (string)result!["AccessToken"]!;
         }
 
         private async Task<HttpClient> CreateClientAsync()

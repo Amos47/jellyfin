@@ -54,6 +54,14 @@ public interface IHomeRowConfigurationService
     Task<IReadOnlyList<HomeRowSaveError>> SaveAdminDefaultAsync(User admin, IReadOnlyList<HomeRowInstance> rows, CancellationToken ct);
 
     /// <summary>
+    /// Deletes the admin default layout, so that users without a layout of their own fall back to their upstream
+    /// home sections, else upstream's standard order. Does nothing if there is none.
+    /// </summary>
+    /// <param name="ct">The cancellation token.</param>
+    /// <returns>A task that completes when the default is deleted.</returns>
+    Task ResetAdminDefaultAsync(CancellationToken ct);
+
+    /// <summary>
     /// Finds a row in the user's effective layout.
     /// </summary>
     /// <param name="user">The user.</param>
