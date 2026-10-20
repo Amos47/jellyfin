@@ -10,6 +10,7 @@ using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.HomeRows.Schema;
 using Jellyfin.HomeRows.Sources;
+using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
@@ -100,10 +101,11 @@ public sealed class ContinueWatchingProvider : IHomeRowProvider
         var rewatching = config[EnableRewatchingKey] is JsonValue r && r.TryGetValue<bool>(out var rb) && rb;
         var days = config[CutoffDaysKey] is JsonValue d && d.TryGetValue<int>(out var di) ? di : DefaultCutoffDays;
         var user = context.User;
+        var queryOptions = WithUserData(context.DtoOptions);
 
         var resumeQuery = ResumeQueryFactory.Create(user, _libraryManager, MediaType.Video, 0, QueryLimit);
         resumeQuery.ExcludeItemTypes = includeMovies ? [BaseItemKind.AudioBook] : [BaseItemKind.AudioBook, BaseItemKind.Movie];
-        resumeQuery.DtoOptions = context.DtoOptions;
+        resumeQuery.DtoOptions = queryOptions;
         var resume = _libraryManager.GetItemsResult(resumeQuery).Items;
 
         var nextUp = _nextUpSource.GetNextUp(
@@ -116,7 +118,7 @@ public sealed class ContinueWatchingProvider : IHomeRowProvider
                 NextUpDateCutoff = NextUpProvider.ResolveCutoff(context, days),
                 EnableTotalRecordCount = false
             },
-            context.DtoOptions).Items;
+            queryOptions).Items;
 
         var recentQuery = new InternalItemsQuery(user)
         {
@@ -125,7 +127,7 @@ public sealed class ContinueWatchingProvider : IHomeRowProvider
             IsPlayed = true,
             OrderBy = [(ItemSortBy.DatePlayed, SortOrder.Descending)],
             Limit = RecentlyPlayedLimit,
-            DtoOptions = context.DtoOptions
+            DtoOptions = queryOptions
         };
         var recent = _libraryManager.GetItemsResult(recentQuery).Items;
 
@@ -141,6 +143,30 @@ public sealed class ContinueWatchingProvider : IHomeRowProvider
         {
             Title = "Continue Watching"
         });
+    }
+
+    /// <summary>
+    /// Combining needs each item's last played date, which the item query only loads when user data is enabled.
+    /// A client can turn that off for its response, so the internal queries get their own options. They keep the
+    /// client's other settings because the same item instances are turned into DTOs afterwards.
+    /// </summary>
+    private static DtoOptions WithUserData(DtoOptions clientOptions)
+    {
+        if (clientOptions.EnableUserData)
+        {
+            return clientOptions;
+        }
+
+        return new DtoOptions(false)
+        {
+            Fields = clientOptions.Fields,
+            ImageTypes = clientOptions.ImageTypes,
+            ImageTypeLimit = clientOptions.ImageTypeLimit,
+            EnableImages = clientOptions.EnableImages,
+            AddProgramRecordingInfo = clientOptions.AddProgramRecordingInfo,
+            AddCurrentProgram = clientOptions.AddCurrentProgram,
+            EnableUserData = true
+        };
     }
 
     private ContinueWatchingCandidate ToCandidate(User user, BaseItem item)

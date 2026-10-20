@@ -81,6 +81,32 @@ public class ContinueWatchingProviderTests
     }
 
     [Fact]
+    public async Task Provider_InternalQueriesLoadUserDataEvenWhenClientDisabledIt()
+    {
+        var clientOptions = new DtoOptions { EnableUserData = false };
+        var context = new HomeRowContext(_context.User, clientOptions, _context.UtcNow);
+        DtoOptions? nextUpOptions = null;
+        HomeRowContext? adaptedContext = null;
+        var provider = CreateProvider([], []);
+        _source
+            .Setup(s => s.GetNextUp(It.IsAny<NextUpQuery>(), It.IsAny<DtoOptions>()))
+            .Callback<NextUpQuery, DtoOptions>((_, o) => nextUpOptions = o)
+            .Returns(new QueryResult<BaseItem>(0, 0, []));
+        _adapter
+            .Setup(a => a.ToDtos(It.IsAny<IReadOnlyList<BaseItem>>(), It.IsAny<HomeRowContext>(), false))
+            .Callback<IReadOnlyList<BaseItem>, HomeRowContext, bool>((_, c, _) => adaptedContext = c)
+            .Returns(Array.Empty<BaseItemDto>());
+
+        await provider.GetItemsAsync(context, new JsonObject(), new HomeRowPaging(0, 10), CancellationToken.None);
+
+        Assert.Equal(2, _queries.Count);
+        Assert.All(_queries, q => Assert.True(q.DtoOptions.EnableUserData));
+        Assert.True(nextUpOptions!.EnableUserData);
+        Assert.False(clientOptions.EnableUserData);
+        Assert.Same(context, adaptedContext);
+    }
+
+    [Fact]
     public async Task Provider_NextUpQueryHasResumableFalse()
     {
         var provider = CreateProvider([], []);
