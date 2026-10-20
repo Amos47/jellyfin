@@ -168,20 +168,29 @@ public class GenreProviderTests
         Assert.Equal([(by, order)], _queries.Single().OrderBy);
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task RemovedGenre_NeedsConfiguration(bool missingKey)
+    [Fact]
+    public async Task MissingGenre_NeedsConfiguration()
     {
         var provider = CreateProvider("Comedy");
-        var config = missingKey ? new JsonObject() : new JsonObject { ["genre"] = "Horror" };
 
-        var result = await Get(provider, config);
+        var result = await Get(provider, new JsonObject());
 
         Assert.Equal("needs-configuration", result.Error);
         Assert.Empty(result.Items);
         Assert.Null(result.TotalRecordCount);
         Assert.Empty(_queries);
+    }
+
+    [Fact]
+    public async Task GetItems_DoesNotQueryTheGenreListAgain()
+    {
+        // The controller already validated the stored genre against the schema it just computed.
+        var provider = CreateProvider("Horror");
+
+        await Get(provider, new JsonObject { ["genre"] = "Horror" });
+
+        Assert.Empty(_genreQueries);
+        Assert.Single(_queries);
     }
 
     [Fact]

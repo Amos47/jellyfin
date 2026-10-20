@@ -9,10 +9,15 @@ using Jellyfin.Api.Models.HomeRowDtos;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.HomeRows;
 using Jellyfin.HomeRows.Configuration;
+using Jellyfin.HomeRows.Providers;
 using Jellyfin.HomeRows.Schema;
+using MediaBrowser.Controller.Dto;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
+using MediaBrowser.Model.Library;
+using MediaBrowser.Model.Querying;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Logging;
@@ -144,6 +149,68 @@ public class HomeRowsControllerTests
         provider.Verify(
             p => p.GetItemsAsync(It.IsAny<HomeRowContext>(), It.IsAny<JsonObject>(), It.IsAny<HomeRowPaging>(), It.IsAny<CancellationToken>()),
             Times.Never);
+    }
+
+    [Fact]
+    public async Task GetRowItems_GenreNoLongerInTheLibrary_NeedsConfigurationWithoutQueryingItems()
+    {
+        var libraryManager = new Mock<ILibraryManager>();
+        libraryManager
+            .Setup(l => l.GetGenres(It.IsAny<InternalItemsQuery>()))
+            .Returns(new QueryResult<(BaseItem Item, ItemCounts ItemCounts)>([((BaseItem)new Genre { Name = "Comedy" }, new ItemCounts())]));
+        var provider = new GenreProvider(libraryManager.Object, new Mock<IHomeRowItemAdapter>().Object);
+        _providerFactory.Setup(f => f.Get(HomeRowProviderIds.Genre)).Returns(provider);
+        var rowId = SetupRow(HomeRowProviderIds.Genre, null, new JsonObject { ["genre"] = "Horror" });
+
+        var result = await GetRowItems(rowId);
+
+        var dto = Assert.IsType<HomeRowItemsDto>(Assert.IsAssignableFrom<OkObjectResult>(result.Result).Value);
+        Assert.Equal("needs-configuration", dto.Error);
+        Assert.Empty(dto.Items);
+        libraryManager.Verify(l => l.GetGenres(It.IsAny<InternalItemsQuery>()), Times.Once);
+        libraryManager.Verify(l => l.GetItemsResult(It.IsAny<InternalItemsQuery>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task GetRowItems_GenreStillInTheLibrary_QueriesGenresOnce()
+    {
+        var libraryManager = new Mock<ILibraryManager>();
+        libraryManager
+            .Setup(l => l.GetGenres(It.IsAny<InternalItemsQuery>()))
+            .Returns(new QueryResult<(BaseItem Item, ItemCounts ItemCounts)>([((BaseItem)new Genre { Name = "Horror" }, new ItemCounts())]));
+        libraryManager
+            .Setup(l => l.GetItemsResult(It.IsAny<InternalItemsQuery>()))
+            .Returns(new QueryResult<BaseItem>(0, 0, []));
+        var adapter = new Mock<IHomeRowItemAdapter>();
+        adapter
+            .Setup(a => a.ToDtos(It.IsAny<IReadOnlyList<BaseItem>>(), It.IsAny<HomeRowContext>(), false))
+            .Returns([]);
+        _providerFactory.Setup(f => f.Get(HomeRowProviderIds.Genre)).Returns(new GenreProvider(libraryManager.Object, adapter.Object));
+        var rowId = SetupRow(HomeRowProviderIds.Genre, null, new JsonObject { ["genre"] = "Horror" });
+
+        var result = await GetRowItems(rowId);
+
+        var dto = Assert.IsType<HomeRowItemsDto>(Assert.IsAssignableFrom<OkObjectResult>(result.Result).Value);
+        Assert.Null(dto.Error);
+        libraryManager.Verify(l => l.GetGenres(It.IsAny<InternalItemsQuery>()), Times.Once);
+        libraryManager.Verify(l => l.GetItemsResult(It.IsAny<InternalItemsQuery>()), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetRowItems_LibraryNoLongerVisible_NeedsConfiguration()
+    {
+        var userViewManager = new Mock<IUserViewManager>();
+        userViewManager.Setup(m => m.GetUserViews(It.IsAny<UserViewQuery>())).Returns([]);
+        var provider = new LatestMediaProvider(userViewManager.Object, new Mock<IHomeRowItemAdapter>().Object);
+        _providerFactory.Setup(f => f.Get(HomeRowProviderIds.LatestMedia)).Returns(provider);
+        var rowId = SetupRow(HomeRowProviderIds.LatestMedia, null, new JsonObject { ["library"] = Guid.NewGuid().ToString("N") });
+
+        var result = await GetRowItems(rowId);
+
+        var dto = Assert.IsType<HomeRowItemsDto>(Assert.IsAssignableFrom<OkObjectResult>(result.Result).Value);
+        Assert.Equal("needs-configuration", dto.Error);
+        Assert.Empty(dto.Items);
+        userViewManager.Verify(m => m.GetLatestItems(It.IsAny<LatestItemsQuery>(), It.IsAny<DtoOptions>()), Times.Never);
     }
 
     [Fact]

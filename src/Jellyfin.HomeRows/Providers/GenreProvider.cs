@@ -96,9 +96,9 @@ public sealed class GenreProvider : IHomeRowProvider
         var presentation = CardStyleSetting.ToPresentation(config, DefaultCardStyle);
         var genre = GetString(config, GenreKey);
 
-        // Names are compared case-insensitively, the stored value is passed to the query as-is.
-        if (string.IsNullOrEmpty(genre)
-            || !GetGenres(context).Contains(genre, StringComparer.OrdinalIgnoreCase))
+        // Whether the genre still exists was checked by the caller against the schema's options, which come from the
+        // same library query. Repeating it here would run the genre query twice per request.
+        if (string.IsNullOrEmpty(genre))
         {
             return Task.FromResult(new HomeRowResult([], null, presentation) { Title = genre, Error = "needs-configuration" });
         }
