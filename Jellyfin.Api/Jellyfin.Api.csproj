@@ -22,6 +22,7 @@
     <ProjectReference Include="..\MediaBrowser.MediaEncoding\MediaBrowser.MediaEncoding.csproj" />
     <ProjectReference Include="..\src\Jellyfin.MediaEncoding.Hls\Jellyfin.MediaEncoding.Hls.csproj" />
     <ProjectReference Include="..\src\Jellyfin.Networking\Jellyfin.Networking.csproj" />
+    <ProjectReference Include="..\src\Jellyfin.HomeRows\Jellyfin.HomeRows.csproj" />
   </ItemGroup>
 
   <!-- Code Analyzers -->
