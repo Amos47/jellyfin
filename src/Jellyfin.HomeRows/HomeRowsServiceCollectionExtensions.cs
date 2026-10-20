@@ -32,6 +32,17 @@ public static class HomeRowsServiceCollectionExtensions
                 .First(p => p.Id == id));
         }
 
+        foreach (var id in new[] { HomeRowProviderIds.LibraryTiles, HomeRowProviderIds.LibraryButtons })
+        {
+            services.AddSingleton<IHomeRowProvider>(sp => LibraryTilesProvider
+                .CreateAll(sp.GetRequiredService<IUserViewManager>(), sp.GetRequiredService<IHomeRowItemAdapter>())
+                .First(p => p.Id == id));
+        }
+
+        services.AddSingleton<IHomeRowProvider, LatestMediaProvider>();
+        services.AddSingleton<IHomeRowProvider, LiveTvProvider>();
+        services.AddSingleton<IHomeRowProvider, ActiveRecordingsProvider>();
+
         // Later tasks add one line per IHomeRowProvider here.
         return services;
     }
