@@ -101,6 +101,11 @@ public static class HomeRowSchemaWriter
             case HomeRowSettingType.MultiEnum:
                 node["items"] = new JsonObject { ["type"] = "string", ["enum"] = Values(setting) };
                 node["uniqueItems"] = true;
+                if (setting.MinItems is not null)
+                {
+                    node["minItems"] = setting.MinItems;
+                }
+
                 node["x-enumLabels"] = Labels(setting);
                 break;
         }

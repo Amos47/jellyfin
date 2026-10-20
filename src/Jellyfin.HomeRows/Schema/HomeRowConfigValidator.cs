@@ -103,6 +103,11 @@ public static class HomeRowConfigValidator
                     return "Expected an array.";
                 }
 
+                if (setting.MinItems is { } minItems && array.Count < minItems)
+                {
+                    return $"Pick at least {minItems}.";
+                }
+
                 var seen = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var item in array)
                 {

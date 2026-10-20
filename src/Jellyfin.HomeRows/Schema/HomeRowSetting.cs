@@ -32,6 +32,11 @@ public sealed record HomeRowSetting(string Key, HomeRowSettingType Type, string 
     public int? Maximum { get; init; }
 
     /// <summary>
+    /// Gets the minimum number of selected values of a multi-enum setting.
+    /// </summary>
+    public int? MinItems { get; init; }
+
+    /// <summary>
     /// Gets the options of an enum or multi-enum setting.
     /// </summary>
     public IReadOnlyList<HomeRowOption> Options { get; init; } = [];

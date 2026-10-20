@@ -160,4 +160,33 @@ public class HomeRowConfigValidatorTests
 
         Assert.Equal("""["a"]""", second.Config["kinds"]!.ToJsonString());
     }
+
+    [Theory]
+    [InlineData("[]", false)]
+    [InlineData("""["a"]""", true)]
+    public void Validator_MinItems(string value, bool valid)
+    {
+        var schema = new HomeRowSchema(
+        [
+            new HomeRowSetting("kinds", HomeRowSettingType.MultiEnum, "Kinds")
+            {
+                Options = [new HomeRowOption("a", "A"), new HomeRowOption("b", "B")],
+                Default = new JsonArray("a", "b"),
+                MinItems = 1
+            }
+        ]);
+
+        var result = HomeRowConfigValidator.Validate(schema, (JsonObject)JsonNode.Parse($$"""{"kinds":{{value}}}""")!);
+
+        if (valid)
+        {
+            Assert.Empty(result.Errors);
+            Assert.Equal(value, result.Config["kinds"]!.ToJsonString());
+        }
+        else
+        {
+            Assert.Equal("kinds", Assert.Single(result.Errors).Key);
+            Assert.Equal("""["a","b"]""", result.Config["kinds"]!.ToJsonString());
+        }
+    }
 }

@@ -58,4 +58,21 @@ public class HomeRowSchemaWriterTests
 
         Assert.Equal("""{"a":5}""", defaults.ToJsonString());
     }
+
+    [Fact]
+    public void ToJsonSchema_MultiEnumMinItems_WritesMinItems()
+    {
+        var schema = new HomeRowSchema(
+        [
+            new HomeRowSetting("kinds", HomeRowSettingType.MultiEnum, "Kinds")
+            {
+                Options = [new HomeRowOption("a", "A")],
+                MinItems = 1
+            }
+        ]);
+
+        var json = HomeRowSchemaWriter.ToJsonSchema(schema);
+
+        Assert.Equal(1, json["properties"]!["kinds"]!["minItems"]!.GetValue<int>());
+    }
 }
