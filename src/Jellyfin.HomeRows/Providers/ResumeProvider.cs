@@ -7,6 +7,7 @@ using Jellyfin.Data.Enums;
 using Jellyfin.HomeRows.Schema;
 using Jellyfin.HomeRows.Sources;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Session;
 
 namespace Jellyfin.HomeRows.Providers;
 
@@ -16,6 +17,7 @@ namespace Jellyfin.HomeRows.Providers;
 public sealed class ResumeProvider : IHomeRowProvider
 {
     private readonly ILibraryManager _libraryManager;
+    private readonly ISessionManager _sessionManager;
     private readonly IHomeRowItemAdapter _adapter;
     private readonly MediaType _mediaType;
     private readonly string _defaultCardStyle;
@@ -29,6 +31,7 @@ public sealed class ResumeProvider : IHomeRowProvider
         MediaType mediaType,
         string defaultCardStyle,
         ILibraryManager libraryManager,
+        ISessionManager sessionManager,
         IHomeRowItemAdapter adapter)
     {
         Id = id;
@@ -38,6 +41,7 @@ public sealed class ResumeProvider : IHomeRowProvider
         _mediaType = mediaType;
         _defaultCardStyle = defaultCardStyle;
         _libraryManager = libraryManager;
+        _sessionManager = sessionManager;
         _adapter = adapter;
     }
 
@@ -54,9 +58,10 @@ public sealed class ResumeProvider : IHomeRowProvider
     /// Creates the video, audio and book resume providers.
     /// </summary>
     /// <param name="libraryManager">The library manager.</param>
+    /// <param name="sessionManager">The session manager.</param>
     /// <param name="adapter">The item adapter.</param>
     /// <returns>The providers.</returns>
-    public static IEnumerable<ResumeProvider> CreateAll(ILibraryManager libraryManager, IHomeRowItemAdapter adapter)
+    public static IEnumerable<ResumeProvider> CreateAll(ILibraryManager libraryManager, ISessionManager sessionManager, IHomeRowItemAdapter adapter)
     {
         yield return new ResumeProvider(
             HomeRowProviderIds.Resume,
@@ -66,6 +71,7 @@ public sealed class ResumeProvider : IHomeRowProvider
             MediaType.Video,
             "thumb",
             libraryManager,
+            sessionManager,
             adapter);
         yield return new ResumeProvider(
             HomeRowProviderIds.ResumeAudio,
@@ -75,6 +81,7 @@ public sealed class ResumeProvider : IHomeRowProvider
             MediaType.Audio,
             "square",
             libraryManager,
+            sessionManager,
             adapter);
         yield return new ResumeProvider(
             HomeRowProviderIds.ResumeBook,
@@ -84,6 +91,7 @@ public sealed class ResumeProvider : IHomeRowProvider
             MediaType.Book,
             "poster",
             libraryManager,
+            sessionManager,
             adapter);
     }
 
@@ -98,7 +106,7 @@ public sealed class ResumeProvider : IHomeRowProvider
         ArgumentNullException.ThrowIfNull(config);
         ArgumentNullException.ThrowIfNull(paging);
 
-        var query = ResumeQueryFactory.Create(context.User, _libraryManager, _mediaType, paging.StartIndex, paging.Limit);
+        var query = ResumeQueryFactory.Create(context.User, _libraryManager, _sessionManager, _mediaType, paging.StartIndex, paging.Limit);
         query.DtoOptions = context.DtoOptions;
 
         var result = _libraryManager.GetItemsResult(query);

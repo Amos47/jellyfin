@@ -5,6 +5,7 @@ using Jellyfin.HomeRows.Providers.ContinueWatching;
 using Jellyfin.HomeRows.Providers.NewReleases;
 using Jellyfin.HomeRows.Sources;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Session;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Jellyfin.HomeRows;
@@ -30,7 +31,7 @@ public static class HomeRowsServiceCollectionExtensions
         foreach (var id in new[] { HomeRowProviderIds.Resume, HomeRowProviderIds.ResumeAudio, HomeRowProviderIds.ResumeBook })
         {
             services.AddSingleton<IHomeRowProvider>(sp => ResumeProvider
-                .CreateAll(sp.GetRequiredService<ILibraryManager>(), sp.GetRequiredService<IHomeRowItemAdapter>())
+                .CreateAll(sp.GetRequiredService<ILibraryManager>(), sp.GetRequiredService<ISessionManager>(), sp.GetRequiredService<IHomeRowItemAdapter>())
                 .First(p => p.Id == id));
         }
 

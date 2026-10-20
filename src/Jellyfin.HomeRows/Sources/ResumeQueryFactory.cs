@@ -8,6 +8,7 @@ using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Extensions;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Querying;
 
 namespace Jellyfin.HomeRows.Sources;
@@ -22,11 +23,12 @@ public static class ResumeQueryFactory
     /// </summary>
     /// <param name="user">The user.</param>
     /// <param name="libraryManager">The library manager.</param>
+    /// <param name="sessionManager">The session manager. When set, the items the user is playing right now are excluded, as jellyfin-web asks for on the home screen (<c>excludeActiveSessions</c>); <c>null</c> excludes nothing.</param>
     /// <param name="mediaType">The media type.</param>
     /// <param name="startIndex">The start index.</param>
     /// <param name="limit">The limit.</param>
     /// <returns>The query.</returns>
-    public static InternalItemsQuery Create(User user, ILibraryManager libraryManager, MediaType mediaType, int startIndex, int limit)
+    public static InternalItemsQuery Create(User user, ILibraryManager libraryManager, ISessionManager? sessionManager, MediaType mediaType, int startIndex, int limit)
     {
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(libraryManager);
@@ -39,6 +41,21 @@ public static class ResumeQueryFactory
                 .Where(i => i is Folder)
                 .Where(i => !excludeFolderIds.Contains(i.Id))
                 .Select(i => i.Id)
+                .ToArray();
+        }
+
+        var excludeItemIds = Array.Empty<Guid>();
+        if (sessionManager is not null)
+        {
+            // NowPlayingItem.Id is the displayed/primary id, but resume queries surface the actually-played
+            // alternate version's own id. Expand each active session to every version id so an in-progress
+            // alternate is excluded too, instead of leaking back into the resume list.
+            excludeItemIds = sessionManager.Sessions
+                .Where(s => s.UserId.Equals(user.Id) && s.NowPlayingItem is not null)
+                .SelectMany(s => libraryManager.GetItemById(s.NowPlayingItem.Id) is Video video
+                    ? video.GetAllVersions().Select(v => v.Id)
+                    : [s.NowPlayingItem.Id])
+                .Distinct()
                 .ToArray();
         }
 
@@ -55,7 +72,8 @@ public static class ResumeQueryFactory
             CollapseBoxSetItems = false,
             IncludeOwnedItems = true,
             EnableTotalRecordCount = true,
-            AncestorIds = ancestorIds
+            AncestorIds = ancestorIds,
+            ExcludeItemIds = excludeItemIds
         };
     }
 }

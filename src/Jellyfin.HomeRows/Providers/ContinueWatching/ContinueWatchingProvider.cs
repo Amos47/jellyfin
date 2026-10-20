@@ -14,6 +14,7 @@ using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Querying;
 
 namespace Jellyfin.HomeRows.Providers.ContinueWatching;
@@ -34,6 +35,7 @@ public sealed class ContinueWatchingProvider : IHomeRowProvider
     private readonly NextUpSource _nextUpSource;
     private readonly ILibraryManager _libraryManager;
     private readonly IUserDataManager _userDataManager;
+    private readonly ISessionManager _sessionManager;
     private readonly IHomeRowItemAdapter _adapter;
 
     /// <summary>
@@ -42,16 +44,19 @@ public sealed class ContinueWatchingProvider : IHomeRowProvider
     /// <param name="nextUpSource">The next up source.</param>
     /// <param name="libraryManager">The library manager.</param>
     /// <param name="userDataManager">The user data manager.</param>
+    /// <param name="sessionManager">The session manager.</param>
     /// <param name="adapter">The item adapter.</param>
     public ContinueWatchingProvider(
         NextUpSource nextUpSource,
         ILibraryManager libraryManager,
         IUserDataManager userDataManager,
+        ISessionManager sessionManager,
         IHomeRowItemAdapter adapter)
     {
         _nextUpSource = nextUpSource;
         _libraryManager = libraryManager;
         _userDataManager = userDataManager;
+        _sessionManager = sessionManager;
         _adapter = adapter;
     }
 
@@ -103,7 +108,7 @@ public sealed class ContinueWatchingProvider : IHomeRowProvider
         var user = context.User;
         var queryOptions = WithUserData(context.DtoOptions);
 
-        var resumeQuery = ResumeQueryFactory.Create(user, _libraryManager, MediaType.Video, 0, QueryLimit);
+        var resumeQuery = ResumeQueryFactory.Create(user, _libraryManager, _sessionManager, MediaType.Video, 0, QueryLimit);
         resumeQuery.ExcludeItemTypes = includeMovies ? [BaseItemKind.AudioBook] : [BaseItemKind.AudioBook, BaseItemKind.Movie];
         resumeQuery.DtoOptions = queryOptions;
         var resume = _libraryManager.GetItemsResult(resumeQuery).Items;

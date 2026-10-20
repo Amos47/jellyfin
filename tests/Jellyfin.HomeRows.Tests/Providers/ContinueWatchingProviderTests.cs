@@ -15,6 +15,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Querying;
 using Moq;
@@ -56,7 +57,7 @@ public class ContinueWatchingProviderTests
             .Setup(a => a.ToDtos(It.IsAny<IReadOnlyList<BaseItem>>(), It.IsAny<HomeRowContext>(), false))
             .Callback<IReadOnlyList<BaseItem>, HomeRowContext, bool>((items, _, _) => _adapted = items)
             .Returns(Array.Empty<BaseItemDto>());
-        return new ContinueWatchingProvider(_source.Object, _libraryManager.Object, _userData.Object, _adapter.Object);
+        return new ContinueWatchingProvider(_source.Object, _libraryManager.Object, _userData.Object, new Mock<ISessionManager>().Object, _adapter.Object);
     }
 
     [Fact]

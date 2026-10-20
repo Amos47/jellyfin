@@ -12,6 +12,7 @@ using Jellyfin.HomeRows.Providers;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Querying;
@@ -23,6 +24,7 @@ namespace Jellyfin.HomeRows.Tests.Providers;
 public class ResumeProviderTests
 {
     private readonly Mock<ILibraryManager> _libraryManager = new();
+    private readonly Mock<ISessionManager> _sessionManager = new();
     private readonly Mock<IHomeRowItemAdapter> _adapter = new();
     private readonly HomeRowContext _context = new(new User("tester", "Default", "Default"), new DtoOptions(), DateTime.UtcNow);
 
@@ -37,10 +39,27 @@ public class ResumeProviderTests
         _adapter
             .Setup(a => a.ToDtos(It.IsAny<IReadOnlyList<BaseItem>>(), It.IsAny<HomeRowContext>(), false))
             .Returns(Array.Empty<BaseItemDto>());
-        return ResumeProvider.CreateAll(_libraryManager.Object, _adapter.Object).ToArray();
+        return ResumeProvider.CreateAll(_libraryManager.Object, _sessionManager.Object, _adapter.Object).ToArray();
     }
 
     private ResumeProvider Get(string id) => CreateProviders().Single(p => p.Id == id);
+
+    [Fact]
+    public async Task Resume_ExcludesItemsPlayingInActiveSessions()
+    {
+        var playing = Guid.NewGuid();
+        var session = new SessionInfo(_sessionManager.Object, Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance)
+        {
+            UserId = _context.User.Id,
+            NowPlayingItem = new BaseItemDto { Id = playing }
+        };
+        _sessionManager.SetupGet(s => s.Sessions).Returns([session]);
+        var provider = Get(HomeRowProviderIds.Resume);
+
+        await provider.GetItemsAsync(_context, new JsonObject(), new HomeRowPaging(0, 9), CancellationToken.None);
+
+        Assert.Equal([playing], _captured!.ExcludeItemIds);
+    }
 
     [Fact]
     public async Task Resume_Video_QueryMatchesUpstream()
