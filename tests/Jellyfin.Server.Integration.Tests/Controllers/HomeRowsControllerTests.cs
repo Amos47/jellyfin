@@ -240,6 +240,21 @@ namespace Jellyfin.Server.Integration.Tests.Controllers
             Assert.Contains("/HomeRows/Providers", spec, StringComparison.Ordinal);
             Assert.Contains("/HomeRows/{rowId}/Items", spec, StringComparison.Ordinal);
             Assert.Contains("/HomeRows/DefaultConfiguration", spec, StringComparison.Ordinal);
+
+            // JsonObject properties are free-form objects, not maps of JsonNode with its Parent and Root properties.
+            var schemas = JsonNode.Parse(spec)!["components"]!["schemas"]!.AsObject();
+            Assert.False(schemas.ContainsKey("JsonNode"));
+            AssertFreeFormObject(schemas["HomeRowProviderDto"]!["properties"]!["Schema"]);
+            AssertFreeFormObject(schemas["HomeRowProviderDto"]!["properties"]!["Defaults"]);
+            AssertFreeFormObject(schemas["HomeRowInstanceDto"]!["properties"]!["Config"]);
+        }
+
+        private static void AssertFreeFormObject(JsonNode? property)
+        {
+            Assert.NotNull(property);
+            Assert.Equal("object", (string?)property["type"]);
+            Assert.Null(property["properties"]);
+            Assert.DoesNotContain("$ref", property.ToJsonString(), StringComparison.Ordinal);
         }
 
         private static async Task<HomeRowConfigurationDto> GetConfigurationAsync(HttpClient client)

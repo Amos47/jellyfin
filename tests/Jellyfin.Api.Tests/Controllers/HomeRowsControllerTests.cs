@@ -28,11 +28,13 @@ public class HomeRowsControllerTests
     private readonly Mock<IHomeRowConfigurationService> _configurationService = new();
     private readonly Mock<ILogger<HomeRowsController>> _logger = new();
     private readonly HomeRowsController _subject;
+    private readonly User _tokenUser;
 
     public HomeRowsControllerTests()
     {
         var httpContextAccessor = new Mock<IHttpContextAccessor>();
         var principal = TestHelpers.SetupUser(_userManager, httpContextAccessor, UserRoles.User);
+        _tokenUser = _userManager.Object.GetUserById(Guid.Empty)!;
         _subject = new HomeRowsController(_userManager.Object, _providerFactory.Object, _configurationService.Object, _logger.Object)
         {
             ControllerContext = new ControllerContext { HttpContext = new DefaultHttpContext { User = principal } }
@@ -43,13 +45,53 @@ public class HomeRowsControllerTests
     public async Task GetRowItems_RowOfAnotherUser_NotFound()
     {
         // The row id exists in another user's layout, but FindRowAsync only searches the caller's layout.
+        var rowId = Guid.NewGuid();
         _configurationService
             .Setup(s => s.FindRowAsync(It.IsAny<User>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((EffectiveHomeRow?)null);
 
-        var result = await GetRowItems(Guid.NewGuid());
+        var result = await GetRowItems(rowId);
 
         Assert.IsType<NotFoundResult>(result.Result);
+        _configurationService.Verify(
+            s => s.FindRowAsync(It.Is<User>(u => u.Id.Equals(_tokenUser.Id)), rowId, It.IsAny<CancellationToken>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task GetProviders_SchemaThrows_SkipsOnlyThatProvider()
+    {
+        var failing = SetupProvider("failing", new HomeRowSchema([]));
+        failing
+            .Setup(p => p.GetSchemaAsync(It.IsAny<HomeRowContext>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("boom"));
+        var working = SetupProvider("working", new HomeRowSchema([new HomeRowSetting("count", HomeRowSettingType.Integer, "Count") { Default = 5 }]));
+        _providerFactory.SetupGet(f => f.Providers).Returns([failing.Object, working.Object]);
+
+        var result = await _subject.GetProviders(CancellationToken.None);
+
+        var dto = Assert.IsType<HomeRowProvidersDto>(Assert.IsAssignableFrom<OkObjectResult>(result.Result).Value);
+        Assert.Equal(1, dto.ApiVersion);
+        var provider = Assert.Single(dto.Providers);
+        Assert.Equal("working", provider.Id);
+        Assert.Equal(5, (int)provider.Defaults["count"]!);
+        _logger.Verify(
+            l => l.Log(LogLevel.Error, It.IsAny<EventId>(), It.IsAny<It.IsAnyType>(), It.IsAny<InvalidOperationException>(), It.IsAny<Func<It.IsAnyType, Exception?, string>>()),
+            Times.Once);
+    }
+
+    [Fact]
+    public async Task GetProviders_RequestCancelled_Throws()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var provider = SetupProvider("cancelled", new HomeRowSchema([]));
+        provider
+            .Setup(p => p.GetSchemaAsync(It.IsAny<HomeRowContext>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException(cts.Token));
+        _providerFactory.SetupGet(f => f.Providers).Returns([provider.Object]);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(() => _subject.GetProviders(cts.Token));
     }
 
     [Fact]
@@ -194,6 +236,8 @@ public class HomeRowsControllerTests
     {
         var provider = new Mock<IHomeRowProvider>();
         provider.SetupGet(p => p.Id).Returns(id);
+        provider.SetupGet(p => p.Name).Returns(id);
+        provider.SetupGet(p => p.Description).Returns(id);
         provider
             .Setup(p => p.GetSchemaAsync(It.IsAny<HomeRowContext>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync(schema);

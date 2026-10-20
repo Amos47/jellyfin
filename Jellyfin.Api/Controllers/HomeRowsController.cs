@@ -72,7 +72,8 @@ public class HomeRowsController : BaseJellyfinApiController
     }
 
     /// <summary>
-    /// Gets the home row providers, with their settings schema for the current user.
+    /// Gets the home row providers, with their settings schema for the current user. A provider whose schema fails is
+    /// logged and left out.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <response code="200">Providers returned.</response>
@@ -92,7 +93,18 @@ public class HomeRowsController : BaseJellyfinApiController
         var providers = new List<HomeRowProviderDto>(_providerFactory.Providers.Count);
         foreach (var provider in _providerFactory.Providers)
         {
-            var schema = await provider.GetSchemaAsync(context, cancellationToken).ConfigureAwait(false);
+            HomeRowSchema schema;
+            try
+            {
+                schema = await provider.GetSchemaAsync(context, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                // One failing provider must not hide the others.
+                _logger.LogError(ex, "Getting the schema of home row provider {ProviderId} failed", provider.Id);
+                continue;
+            }
+
             providers.Add(new HomeRowProviderDto(
                 provider.Id,
                 provider.Name,
