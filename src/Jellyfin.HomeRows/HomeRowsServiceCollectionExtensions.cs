@@ -46,6 +46,7 @@ public static class HomeRowsServiceCollectionExtensions
         services.AddSingleton<IHomeRowProvider, LiveTvProvider>();
         services.AddSingleton<IHomeRowProvider, ActiveRecordingsProvider>();
         services.AddSingleton<IHomeRowProvider, NewReleasesProvider>();
+        services.AddSingleton<IHomeRowProvider, GenreProvider>();
 
         // Later tasks add one line per IHomeRowProvider here.
         return services;
