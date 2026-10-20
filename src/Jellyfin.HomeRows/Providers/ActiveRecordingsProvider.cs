@@ -2,6 +2,8 @@ using System;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.HomeRows.Schema;
 using MediaBrowser.Controller.LiveTv;
 using MediaBrowser.Model.Entities;
@@ -44,10 +46,16 @@ public sealed class ActiveRecordingsProvider : IHomeRowProvider
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(paging);
 
+        var presentation = new HomeRowPresentation(HomeRowCardShape.Thumb, ImageType.Thumb, ImageType.Primary);
+        if (!context.User.HasPermission(PermissionKind.EnableLiveTvAccess))
+        {
+            return new HomeRowResult([], 0, presentation);
+        }
+
         var result = await _liveTvManager.GetRecordingsAsync(
             new RecordingQuery { UserId = context.User.Id, IsInProgress = true, StartIndex = paging.StartIndex, Limit = paging.Limit },
             context.DtoOptions).ConfigureAwait(false);
 
-        return new HomeRowResult(result.Items, result.TotalRecordCount, new HomeRowPresentation(HomeRowCardShape.Thumb, ImageType.Thumb, ImageType.Primary));
+        return new HomeRowResult(result.Items, result.TotalRecordCount, presentation);
     }
 }

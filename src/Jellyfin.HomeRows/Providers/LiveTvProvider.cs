@@ -1,7 +1,10 @@
 using System;
+using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.HomeRows.Schema;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.LiveTv;
@@ -47,12 +50,20 @@ public sealed class LiveTvProvider : IHomeRowProvider
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(paging);
 
+        var presentation = new HomeRowPresentation(HomeRowCardShape.Thumb, ImageType.Thumb, ImageType.Primary);
+        if (!context.User.HasPermission(PermissionKind.EnableLiveTvAccess))
+        {
+            return Task.FromResult(new HomeRowResult([], 0, presentation));
+        }
+
+        // The Live TV manager has no start index, so fetch up to the end of the requested page and skip the
+        // leading items. The total is the number of items the manager returned, which is all that paging can reach.
         var result = _liveTvManager.GetRecommendedProgramsInternal(
-            new InternalItemsQuery(context.User) { IsAiring = true, Limit = paging.Limit },
+            new InternalItemsQuery(context.User) { IsAiring = true, Limit = paging.StartIndex + paging.Limit },
             context.DtoOptions,
             cancellationToken);
-        var items = _adapter.ToDtos(result.Items, context);
+        var items = _adapter.ToDtos(result.Items.Skip(paging.StartIndex).ToList(), context);
 
-        return Task.FromResult(new HomeRowResult(items, result.TotalRecordCount, new HomeRowPresentation(HomeRowCardShape.Thumb, ImageType.Thumb, ImageType.Primary)));
+        return Task.FromResult(new HomeRowResult(items, result.Items.Count, presentation));
     }
 }

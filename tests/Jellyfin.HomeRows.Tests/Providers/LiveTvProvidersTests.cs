@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Data;
 using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.HomeRows.Providers;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
@@ -20,7 +22,21 @@ public class LiveTvProvidersTests
 {
     private readonly Mock<ILiveTvManager> _liveTv = new();
     private readonly Mock<IHomeRowItemAdapter> _adapter = new();
-    private readonly HomeRowContext _context = new(new User("tester", "Default", "Default"), new DtoOptions(), DateTime.UtcNow);
+    private readonly HomeRowContext _context;
+
+    public LiveTvProvidersTests()
+    {
+        var user = new User("tester", "Default", "Default");
+        user.SetPermission(PermissionKind.EnableLiveTvAccess, true);
+        _context = new HomeRowContext(user, new DtoOptions(), DateTime.UtcNow);
+    }
+
+    private static HomeRowContext NoAccessContext()
+    {
+        var user = new User("tester", "Default", "Default");
+        user.SetPermission(PermissionKind.EnableLiveTvAccess, false);
+        return new HomeRowContext(user, new DtoOptions(), DateTime.UtcNow);
+    }
 
     [Fact]
     public async Task LiveTv_QueriesAiring()
@@ -66,5 +82,56 @@ public class LiveTvProvidersTests
         Assert.Equal(_context.User.Id, captured.UserId);
         Assert.Same(dtos, result.Items);
         Assert.Equal(1, result.TotalRecordCount);
+    }
+
+    [Fact]
+    public async Task LiveTv_WithoutLiveTvPermission_ReturnsEmptyWithoutQuerying()
+    {
+        var provider = new LiveTvProvider(_liveTv.Object, _adapter.Object);
+
+        var result = await provider.GetItemsAsync(NoAccessContext(), new JsonObject(), new HomeRowPaging(0, 8), CancellationToken.None);
+
+        Assert.Empty(result.Items);
+        Assert.Equal(0, result.TotalRecordCount);
+        Assert.Null(result.Error);
+        _liveTv.VerifyNoOtherCalls();
+        _adapter.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task Recordings_WithoutLiveTvPermission_ReturnsEmptyWithoutQuerying()
+    {
+        var provider = new ActiveRecordingsProvider(_liveTv.Object);
+
+        var result = await provider.GetItemsAsync(NoAccessContext(), new JsonObject(), new HomeRowPaging(0, 6), CancellationToken.None);
+
+        Assert.Empty(result.Items);
+        Assert.Equal(0, result.TotalRecordCount);
+        _liveTv.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task LiveTv_StartIndex_SkipsItemsAndTotalMatchesFetchedList()
+    {
+        InternalItemsQuery? captured = null;
+        var first = new Mock<BaseItem>().Object;
+        var second = new Mock<BaseItem>().Object;
+        var third = new Mock<BaseItem>().Object;
+        IReadOnlyList<BaseItem>? adapted = null;
+        _liveTv
+            .Setup(l => l.GetRecommendedProgramsInternal(It.IsAny<InternalItemsQuery>(), _context.DtoOptions, CancellationToken.None))
+            .Callback<InternalItemsQuery, DtoOptions, CancellationToken>((q, _, _) => captured = q)
+            .Returns(new QueryResult<BaseItem>(0, 200, [first, second, third]));
+        _adapter
+            .Setup(a => a.ToDtos(It.IsAny<IReadOnlyList<BaseItem>>(), _context, false))
+            .Callback<IReadOnlyList<BaseItem>, HomeRowContext, bool>((i, _, _) => adapted = i)
+            .Returns([new BaseItemDto()]);
+        var provider = new LiveTvProvider(_liveTv.Object, _adapter.Object);
+
+        var result = await provider.GetItemsAsync(_context, new JsonObject(), new HomeRowPaging(1, 2), CancellationToken.None);
+
+        Assert.Equal(3, captured!.Limit);
+        Assert.Equal([second, third], adapted);
+        Assert.Equal(3, result.TotalRecordCount);
     }
 }
