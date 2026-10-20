@@ -1,3 +1,4 @@
+using Jellyfin.HomeRows.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Jellyfin.HomeRows;
@@ -16,8 +17,9 @@ public static class HomeRowsServiceCollectionExtensions
     {
         services.AddSingleton<IHomeRowProviderFactory, HomeRowProviderFactory>();
         services.AddSingleton<IHomeRowItemAdapter, HomeRowItemAdapter>();
+        services.AddSingleton<IHomeRowConfigurationService, HomeRowConfigurationService>();
 
-        // Later tasks add the configuration service and one line per IHomeRowProvider here.
+        // Later tasks add one line per IHomeRowProvider here.
         return services;
     }
 }
