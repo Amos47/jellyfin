@@ -8,15 +8,16 @@ using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Custom.Database;
 using Jellyfin.Custom.Database.Entities;
+using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
 using Jellyfin.Extensions;
 using Jellyfin.HomeRows.Schema;
 using MediaBrowser.Common.Extensions;
-using MediaBrowser.Controller;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Library;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.HomeRows.Configuration;
 
@@ -27,6 +28,8 @@ namespace Jellyfin.HomeRows.Configuration;
 /// <see cref="CustomHomeRowConfiguration.RowsJson"/> and <see cref="CustomHomeRowDefault.RowsJson"/> hold a JSON
 /// array of rows in display order, each
 /// <c>{"id":"&lt;guid, D format&gt;","provider":"&lt;provider id&gt;","title":"&lt;title&gt;"|null,"config":{...},"enabled":true|false}</c>.
+/// A missing <c>enabled</c> reads as <c>true</c>. A record that does not parse, or has a row without an id or provider,
+/// is treated as absent: reads fall through to the next precedence level, and saves overwrite it.
 /// </remarks>
 public class HomeRowConfigurationService : IHomeRowConfigurationService
 {
@@ -39,27 +42,31 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
     private const string UpstreamSettingsId = "usersettings";
 
     private readonly IDbContextFactory<CustomDbContext> _dbFactory;
+    private readonly IDbContextFactory<JellyfinDbContext> _jellyfinDbFactory;
     private readonly IHomeRowProviderFactory _providerFactory;
-    private readonly IDisplayPreferencesManager _displayPreferencesManager;
     private readonly IUserViewManager _userViewManager;
+    private readonly ILogger<HomeRowConfigurationService> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="HomeRowConfigurationService"/> class.
     /// </summary>
     /// <param name="dbFactory">The fork database context factory.</param>
+    /// <param name="jellyfinDbFactory">The upstream database context factory, only read from (upstream home sections).</param>
     /// <param name="providerFactory">The home row provider factory.</param>
-    /// <param name="displayPreferencesManager">The display preferences manager, only read from.</param>
     /// <param name="userViewManager">The user view manager.</param>
+    /// <param name="logger">The logger.</param>
     public HomeRowConfigurationService(
         IDbContextFactory<CustomDbContext> dbFactory,
+        IDbContextFactory<JellyfinDbContext> jellyfinDbFactory,
         IHomeRowProviderFactory providerFactory,
-        IDisplayPreferencesManager displayPreferencesManager,
-        IUserViewManager userViewManager)
+        IUserViewManager userViewManager,
+        ILogger<HomeRowConfigurationService> logger)
     {
         _dbFactory = dbFactory;
+        _jellyfinDbFactory = jellyfinDbFactory;
         _providerFactory = providerFactory;
-        _displayPreferencesManager = displayPreferencesManager;
         _userViewManager = userViewManager;
+        _logger = logger;
     }
 
     /// <inheritdoc />
@@ -73,22 +80,18 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
             var own = await context.HomeRowConfigurations.AsNoTracking()
                 .FirstOrDefaultAsync(c => c.UserId.Equals(user.Id), ct)
                 .ConfigureAwait(false);
-            if (own is not null)
+            if (own is not null && TryDeserialize(own.RowsJson, user.Id) is { } ownRows)
             {
-                return ToLayout(HomeRowLayoutSource.User, Deserialize(own.RowsJson));
+                return ToLayout(HomeRowLayoutSource.User, ownRows);
             }
 
-            var adminDefault = await GetDefaultEntityAsync(context, true, ct).ConfigureAwait(false);
-            if (adminDefault is not null)
+            if (await GetAdminDefaultRowsAsync(context, ct).ConfigureAwait(false) is { } defaultRows)
             {
-                return ToLayout(HomeRowLayoutSource.AdminDefault, Deserialize(adminDefault.RowsJson));
+                return ToLayout(HomeRowLayoutSource.AdminDefault, defaultRows);
             }
         }
 
-        // Only read: GetDisplayPreferences creates an entity when there is none, but nothing here saves it.
-        var sections = _displayPreferencesManager
-            .GetDisplayPreferences(user.Id, UpstreamSettingsId.GetMD5(), UpstreamSettingsClient)
-            .HomeSections;
+        var sections = await GetUpstreamSectionsAsync(user.Id, ct).ConfigureAwait(false);
         var latestViewIds = LatestViews.Get(user, _userViewManager).Select(v => v.Id).ToArray();
         return sections.Any(s => s.Type != HomeSectionType.None)
             ? ToLayout(HomeRowLayoutSource.UpstreamSections, UpstreamHomeSectionMapper.Map(sections.ToArray(), latestViewIds))
@@ -107,7 +110,11 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
             var entity = await context.HomeRowConfigurations
                 .FirstOrDefaultAsync(c => c.UserId.Equals(user.Id), ct)
                 .ConfigureAwait(false);
-            var stored = entity is null ? [] : Deserialize(entity.RowsJson);
+            // The baseline for rows with an unregistered provider is the layout the user was shown: their own, or else
+            // the admin default they inherit. A corrupt own record gives an empty baseline, so it can be overwritten.
+            var stored = entity is null
+                ? await GetAdminDefaultRowsAsync(context, ct).ConfigureAwait(false) ?? []
+                : TryDeserialize(entity.RowsJson, user.Id) ?? [];
             var (normalized, errors) = await NormalizeAsync(user, rows, stored, ct).ConfigureAwait(false);
             if (errors.Count > 0)
             {
@@ -156,8 +163,7 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         var context = await _dbFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
         await using (context.ConfigureAwait(false))
         {
-            var entity = await GetDefaultEntityAsync(context, true, ct).ConfigureAwait(false);
-            return entity is null ? null : Deserialize(entity.RowsJson);
+            return await GetAdminDefaultRowsAsync(context, ct).ConfigureAwait(false);
         }
     }
 
@@ -171,7 +177,7 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         await using (context.ConfigureAwait(false))
         {
             var entity = await GetDefaultEntityAsync(context, false, ct).ConfigureAwait(false);
-            var stored = entity is null ? [] : Deserialize(entity.RowsJson);
+            var stored = entity is null ? [] : TryDeserialize(entity.RowsJson, "admin default") ?? [];
             var (normalized, errors) = await NormalizeAsync(admin, rows, stored, ct).ConfigureAwait(false);
             if (errors.Count > 0)
             {
@@ -224,10 +230,52 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
             Enabled = r.Enabled
         }));
 
-    private static List<HomeRowInstance> Deserialize(string json)
-        => (JsonSerializer.Deserialize<List<StoredRow>>(json) ?? [])
-            .Select(r => new HomeRowInstance(r.Id, r.Provider, r.Title, r.Config ?? new JsonObject(), r.Enabled))
-            .ToList();
+    private async Task<List<HomeRowInstance>?> GetAdminDefaultRowsAsync(CustomDbContext context, CancellationToken ct)
+    {
+        var entity = await GetDefaultEntityAsync(context, true, ct).ConfigureAwait(false);
+        return entity is null ? null : TryDeserialize(entity.RowsJson, "admin default");
+    }
+
+    private async Task<IReadOnlyCollection<HomeSection>> GetUpstreamSectionsAsync(Guid userId, CancellationToken ct)
+    {
+        // Read directly, untracked: IDisplayPreferencesManager.GetDisplayPreferences inserts a row when there is none.
+        var itemId = UpstreamSettingsId.GetMD5();
+        var context = await _jellyfinDbFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using (context.ConfigureAwait(false))
+        {
+            var preferences = await context.DisplayPreferences.AsNoTracking()
+                .Include(p => p.HomeSections)
+                .FirstOrDefaultAsync(p => p.UserId.Equals(userId) && p.Client == UpstreamSettingsClient && p.ItemId.Equals(itemId), ct)
+                .ConfigureAwait(false);
+            return preferences?.HomeSections.ToArray() ?? [];
+        }
+    }
+
+    private List<HomeRowInstance>? TryDeserialize(string json, object owner)
+    {
+        try
+        {
+            var stored = JsonSerializer.Deserialize<List<StoredRow?>>(json)
+                ?? throw new JsonException("The layout is null.");
+            var rows = new List<HomeRowInstance>(stored.Count);
+            foreach (var row in stored)
+            {
+                if (row is null || row.Id.IsEmpty() || string.IsNullOrEmpty(row.Provider))
+                {
+                    throw new JsonException("A row has no id or provider.");
+                }
+
+                rows.Add(new HomeRowInstance(row.Id, row.Provider, row.Title, row.Config ?? new JsonObject(), row.Enabled));
+            }
+
+            return rows;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or NotSupportedException)
+        {
+            _logger.LogWarning(ex, "Ignoring the corrupt home row layout of {Owner}", owner);
+            return null;
+        }
+    }
 
     private EffectiveHomeRowLayout ToLayout(HomeRowLayoutSource source, IEnumerable<HomeRowInstance> rows)
         => new(source, rows.Select(r => new EffectiveHomeRow(r, _providerFactory.Get(r.Provider) is not null)).ToArray());
@@ -278,7 +326,7 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
                     schemas[provider.Id] = schema;
                 }
 
-                var result = HomeRowConfigValidator.Validate(schema, row.Config);
+                var result = HomeRowConfigValidator.Validate(schema, row.Config ?? new JsonObject());
                 errors.AddRange(result.Errors.Select(e => new HomeRowSaveError(i, e.Key, e.Message)));
                 config = result.Config;
             }
@@ -306,7 +354,7 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         public Guid Id { get; set; }
 
         [JsonPropertyName("provider")]
-        public string Provider { get; set; } = string.Empty;
+        public string? Provider { get; set; }
 
         [JsonPropertyName("title")]
         public string? Title { get; set; }
@@ -315,6 +363,6 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         public JsonObject? Config { get; set; }
 
         [JsonPropertyName("enabled")]
-        public bool Enabled { get; set; }
+        public bool Enabled { get; set; } = true;
     }
 }

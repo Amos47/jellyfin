@@ -6,19 +6,22 @@ using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Custom.Database;
+using Jellyfin.Custom.Database.Entities;
 using Jellyfin.Data;
 using Jellyfin.Data.Enums;
+using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Database.Implementations.Enums;
+using Jellyfin.Database.Implementations.Locking;
 using Jellyfin.HomeRows.Configuration;
 using Jellyfin.HomeRows.Schema;
 using MediaBrowser.Common.Extensions;
-using MediaBrowser.Controller;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Library;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
 using static Jellyfin.HomeRows.Tests.Configuration.UpstreamHomeSectionMapperTests;
@@ -30,10 +33,10 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     private const string Gone = "gone-provider";
 
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"homerows-{Guid.NewGuid():N}.db");
+    private readonly string _jellyfinDbPath = Path.Combine(Path.GetTempPath(), $"homerows-jellyfin-{Guid.NewGuid():N}.db");
     private readonly IDbContextFactory<CustomDbContext> _dbFactory;
-    private readonly Mock<IDisplayPreferencesManager> _displayPreferences = new();
+    private readonly IDbContextFactory<JellyfinDbContext> _jellyfinDbFactory;
     private readonly Mock<IUserViewManager> _userViews = new();
-    private readonly Dictionary<Guid, DisplayPreferences> _preferences = [];
     private readonly User _user = new("alice", "Default", "Default");
     private readonly User _other = new("bob", "Default", "Default");
     private readonly User _admin = new("admin", "Default", "Default");
@@ -53,9 +56,18 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
             context.Database.Migrate();
         }
 
-        _displayPreferences
-            .Setup(m => m.GetDisplayPreferences(It.IsAny<Guid>(), It.IsAny<Guid>(), It.IsAny<string>()))
-            .Returns((Guid userId, Guid itemId, string client) => GetPreferences(userId, itemId, client));
+        var jellyfinOptions = new DbContextOptionsBuilder<JellyfinDbContext>().UseSqlite($"Data Source={_jellyfinDbPath}").Options;
+        _jellyfinDbFactory = new TestJellyfinDbFactory(jellyfinOptions);
+        using (var jellyfin = _jellyfinDbFactory.CreateDbContext())
+        {
+            jellyfin.Database.EnsureCreated();
+            jellyfin.Users.AddRange(
+                new User(_user.Username, "Default", "Default") { Id = _user.Id },
+                new User(_other.Username, "Default", "Default") { Id = _other.Id },
+                new User(_admin.Username, "Default", "Default") { Id = _admin.Id });
+            jellyfin.SaveChanges();
+        }
+
         _userViews
             .Setup(m => m.GetUserViews(It.IsAny<UserViewQuery>()))
             .Returns(() =>
@@ -71,6 +83,7 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     {
         SqliteConnection.ClearAllPools();
         File.Delete(_dbPath);
+        File.Delete(_jellyfinDbPath);
     }
 
     [Fact]
@@ -100,7 +113,7 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     [Fact]
     public async Task Effective_OnlyNoneSections_StandardDefault()
     {
-        GetPreferences(_user.Id, "usersettings".GetMD5(), "emby").HomeSections.Add(Section(1, 0, HomeSectionType.None));
+        AddSections(_user.Id, "emby", Section(1, 0, HomeSectionType.None));
 
         var layout = await CreateService().GetEffectiveLayoutAsync(_user, Ct);
 
@@ -110,11 +123,14 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     [Fact]
     public async Task Effective_UpstreamSections_UsedWhenNoAdminDefault()
     {
-        var sections = GetPreferences(_user.Id, "usersettings".GetMD5(), "emby").HomeSections;
-        sections.Add(Section(1, 1, HomeSectionType.Resume));
-        sections.Add(Section(2, 0, HomeSectionType.LatestMedia));
-        sections.Add(Section(3, 2, HomeSectionType.None));
-        GetPreferences(_user.Id, "usersettings".GetMD5(), "other-client").HomeSections.Add(Section(4, 0, HomeSectionType.NextUp));
+        AddSections(
+            _user.Id,
+            "emby",
+            Section(1, 1, HomeSectionType.Resume),
+            Section(2, 0, HomeSectionType.LatestMedia),
+            Section(3, 2, HomeSectionType.None));
+        AddSections(_user.Id, "other-client", Section(4, 0, HomeSectionType.NextUp));
+        AddSections(_other.Id, "emby", Section(5, 0, HomeSectionType.NextUp));
 
         var layout = await CreateService().GetEffectiveLayoutAsync(_user, Ct);
 
@@ -127,7 +143,7 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     [Fact]
     public async Task Effective_AdminDefault_BeatsUpstreamSections()
     {
-        GetPreferences(_user.Id, "usersettings".GetMD5(), "emby").HomeSections.Add(Section(1, 0, HomeSectionType.Resume));
+        AddSections(_user.Id, "emby", Section(1, 0, HomeSectionType.Resume));
         var service = CreateService();
 
         Assert.Empty(await service.SaveAdminDefaultAsync(_admin, [Row(HomeRowProviderIds.NextUp)], Ct));
@@ -374,16 +390,112 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     [Fact]
     public async Task Read_NeverWritesDisplayPreferences()
     {
-        GetPreferences(_user.Id, "usersettings".GetMD5(), "emby").HomeSections.Add(Section(1, 0, HomeSectionType.Resume));
+        AddSections(_user.Id, "emby", Section(1, 0, HomeSectionType.Resume));
+        var service = CreateService();
+        var before = await CountPreferencesAsync();
+
+        var withSections = await service.GetEffectiveLayoutAsync(_user, Ct);
+        var withoutRow = await service.GetEffectiveLayoutAsync(_other, Ct);
+        await service.FindRowAsync(_admin, Guid.NewGuid(), Ct);
+
+        Assert.Equal(HomeRowLayoutSource.UpstreamSections, withSections.Source);
+        Assert.Equal(new[] { HomeRowProviderIds.Resume }, withSections.Rows.Select(r => r.Row.Provider));
+        Assert.Equal(HomeRowLayoutSource.StandardDefault, withoutRow.Source);
+        Assert.Equal((1, 1), before);
+        Assert.Equal(before, await CountPreferencesAsync());
+    }
+
+    [Fact]
+    public async Task Save_InheritingUser_CanResaveUnavailableAdminDefaultRow()
+    {
+        var goneId = Guid.NewGuid();
+        Assert.Empty(await CreateService(includeGone: true).SaveAdminDefaultAsync(
+            _admin,
+            [new HomeRowInstance(goneId, Gone, null, new JsonObject { ["a"] = 1 }, true)],
+            Ct));
+        var service = CreateService();
+        var shown = Assert.Single((await service.GetEffectiveLayoutAsync(_user, Ct)).Rows);
+        Assert.False(shown.IsAvailable);
+
+        Assert.Equal(
+            "provider",
+            Assert.Single(await service.SaveUserLayoutAsync(_user, [shown.Row, Row(Gone)], Ct)).Key);
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [shown.Row, Row(HomeRowProviderIds.Resume)], Ct));
+
+        var layout = await service.GetEffectiveLayoutAsync(_user, Ct);
+        Assert.Equal(HomeRowLayoutSource.User, layout.Source);
+        Assert.True(layout.Rows[0].Row.Id.Equals(goneId));
+        Assert.Equal("{\"a\":1}", layout.Rows[0].Row.Config.ToJsonString());
+    }
+
+    [Theory]
+    [InlineData("not json")]
+    [InlineData("null")]
+    [InlineData("{}")]
+    [InlineData("[null]")]
+    [InlineData("[{\"id\":\"6f9619ff-8b86-d011-b42d-00c04fc964ff\"}]")]
+    [InlineData("[{\"provider\":\"resume\"}]")]
+    [InlineData("[{\"id\":\"6f9619ff-8b86-d011-b42d-00c04fc964ff\",\"provider\":\"resume\",\"config\":[1]}]")]
+    public async Task Read_CorruptRecords_FallThrough(string json)
+    {
+        AddSections(_other.Id, "emby", Section(1, 0, HomeSectionType.NextUp));
+        var service = CreateService();
+        Assert.Empty(await service.SaveAdminDefaultAsync(_admin, [Row(HomeRowProviderIds.Resume)], Ct));
+        await StoreUserJsonAsync(_user.Id, json);
+
+        // A corrupt own record falls through to the admin default.
+        var layout = await service.GetEffectiveLayoutAsync(_user, Ct);
+        Assert.Equal(HomeRowLayoutSource.AdminDefault, layout.Source);
+        Assert.Equal(new[] { HomeRowProviderIds.Resume }, layout.Rows.Select(r => r.Row.Provider));
+
+        // A corrupt admin default falls through to upstream sections, or the standard order.
+        await StoreDefaultJsonAsync(json);
+        Assert.Null(await service.GetAdminDefaultAsync(Ct));
+        Assert.Equal(HomeRowLayoutSource.StandardDefault, (await service.GetEffectiveLayoutAsync(_user, Ct)).Source);
+        Assert.Equal(HomeRowLayoutSource.UpstreamSections, (await service.GetEffectiveLayoutAsync(_other, Ct)).Source);
+        Assert.Equal(HomeRowLayoutSource.StandardDefault, (await service.GetEffectiveLayoutAsync(_admin, Ct)).Source);
+    }
+
+    [Fact]
+    public async Task Save_CorruptStoredRecords_AreOverwritten()
+    {
+        var service = CreateService();
+        await StoreUserJsonAsync(_user.Id, "not json");
+        await StoreDefaultJsonAsync("not json");
+
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [Row(HomeRowProviderIds.NextUp)], Ct));
+        Assert.Empty(await service.SaveAdminDefaultAsync(_admin, [Row(HomeRowProviderIds.Resume)], Ct));
+        Assert.Equal("provider", Assert.Single(await service.SaveUserLayoutAsync(_user, [Row(Gone)], Ct)).Key);
+
+        var layout = await service.GetEffectiveLayoutAsync(_user, Ct);
+        Assert.Equal(HomeRowLayoutSource.User, layout.Source);
+        Assert.Equal(new[] { HomeRowProviderIds.NextUp }, layout.Rows.Select(r => r.Row.Provider));
+        Assert.Equal(new[] { HomeRowProviderIds.Resume }, (await service.GetAdminDefaultAsync(Ct))!.Select(r => r.Provider));
+    }
+
+    [Fact]
+    public async Task Read_MissingEnabledAndConfig_DefaultToEnabledAndEmpty()
+    {
+        var id = Guid.NewGuid();
+        await StoreUserJsonAsync(_user.Id, $"[{{\"id\":\"{id}\",\"provider\":\"resume\"}}]");
+
+        var row = Assert.Single((await CreateService().GetEffectiveLayoutAsync(_user, Ct)).Rows).Row;
+
+        Assert.True(row.Id.Equals(id));
+        Assert.True(row.Enabled);
+        Assert.Null(row.Title);
+        Assert.Empty(row.Config);
+    }
+
+    [Fact]
+    public async Task Save_NullConfig_TreatedAsEmpty()
+    {
         var service = CreateService();
 
-        await service.GetEffectiveLayoutAsync(_user, Ct);
-        await service.GetEffectiveLayoutAsync(_other, Ct);
-        await service.FindRowAsync(_user, Guid.NewGuid(), Ct);
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [new HomeRowInstance(Guid.Empty, HomeRowProviderIds.Resume, null, null!, true)], Ct));
 
-        _displayPreferences.Verify(m => m.GetDisplayPreferences(_user.Id, "usersettings".GetMD5(), "emby"), Times.Exactly(2));
-        _displayPreferences.Verify(m => m.GetDisplayPreferences(_other.Id, "usersettings".GetMD5(), "emby"), Times.Once);
-        _displayPreferences.VerifyNoOtherCalls();
+        var row = Assert.Single((await service.GetEffectiveLayoutAsync(_user, Ct)).Rows).Row;
+        Assert.Equal("{\"limit\":10}", row.Config.ToJsonString());
     }
 
     [Fact]
@@ -444,21 +556,45 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
 
         return new HomeRowConfigurationService(
             _dbFactory,
+            _jellyfinDbFactory,
             new HomeRowProviderFactory(providers),
-            _displayPreferences.Object,
-            _userViews.Object);
+            _userViews.Object,
+            NullLogger<HomeRowConfigurationService>.Instance);
     }
 
-    private DisplayPreferences GetPreferences(Guid userId, Guid itemId, string client)
+    private void AddSections(Guid userId, string client, params HomeSection[] sections)
     {
-        var key = $"{userId}:{itemId}:{client}".GetMD5();
-        if (!_preferences.TryGetValue(key, out var preferences))
+        using var context = _jellyfinDbFactory.CreateDbContext();
+        var preferences = new DisplayPreferences(userId, "usersettings".GetMD5(), client);
+        foreach (var section in sections)
         {
-            preferences = new DisplayPreferences(userId, itemId, client);
-            _preferences[key] = preferences;
+            preferences.HomeSections.Add(section);
         }
 
-        return preferences;
+        context.DisplayPreferences.Add(preferences);
+        context.SaveChanges();
+    }
+
+    private async Task<(int Preferences, int Sections)> CountPreferencesAsync()
+    {
+        await using var context = await _jellyfinDbFactory.CreateDbContextAsync(Ct);
+        return (await context.DisplayPreferences.CountAsync(Ct), await context.Set<HomeSection>().CountAsync(Ct));
+    }
+
+    private async Task StoreUserJsonAsync(Guid userId, string json)
+    {
+        await using var context = await _dbFactory.CreateDbContextAsync(Ct);
+        await context.HomeRowConfigurations.Where(c => c.UserId.Equals(userId)).ExecuteDeleteAsync(Ct);
+        context.HomeRowConfigurations.Add(new CustomHomeRowConfiguration { UserId = userId, RowsJson = json, DateModified = DateTime.UtcNow });
+        await context.SaveChangesAsync(Ct);
+    }
+
+    private async Task StoreDefaultJsonAsync(string json)
+    {
+        await using var context = await _dbFactory.CreateDbContextAsync(Ct);
+        await context.HomeRowDefaults.ExecuteDeleteAsync(Ct);
+        context.HomeRowDefaults.Add(new CustomHomeRowDefault { RowsJson = json, DateModified = DateTime.UtcNow });
+        await context.SaveChangesAsync(Ct);
     }
 
     private async Task AssertNothingStoredAsync()
@@ -470,5 +606,14 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     private sealed class TestDbFactory(DbContextOptions<CustomDbContext> options) : IDbContextFactory<CustomDbContext>
     {
         public CustomDbContext CreateDbContext() => new(options);
+    }
+
+    private sealed class TestJellyfinDbFactory(DbContextOptions<JellyfinDbContext> options) : IDbContextFactory<JellyfinDbContext>
+    {
+        public JellyfinDbContext CreateDbContext() => new(
+            options,
+            NullLogger<JellyfinDbContext>.Instance,
+            new Mock<IJellyfinDatabaseProvider>().Object,
+            new NoLockBehavior(NullLogger<NoLockBehavior>.Instance));
     }
 }
