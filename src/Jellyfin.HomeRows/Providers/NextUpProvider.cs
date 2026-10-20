@@ -79,7 +79,7 @@ public sealed class NextUpProvider : IHomeRowProvider
             Limit = paging.Limit,
             EnableResumable = false,
             EnableRewatching = rewatching,
-            NextUpDateCutoff = days > 0 ? context.UtcNow.AddDays(-days) : DateTime.MinValue,
+            NextUpDateCutoff = ResolveCutoff(context, days),
             EnableTotalRecordCount = true
         };
 
@@ -88,4 +88,13 @@ public sealed class NextUpProvider : IHomeRowProvider
 
         return Task.FromResult(new HomeRowResult(items, result.TotalRecordCount, CardStyleSetting.ToPresentation(config, DefaultCardStyle)));
     }
+
+    /// <summary>
+    /// Maps the cutoff days setting to the next up date cutoff.
+    /// </summary>
+    /// <param name="context">The request context.</param>
+    /// <param name="days">The cutoff in days, 0 or less disables it.</param>
+    /// <returns>The cutoff date.</returns>
+    internal static DateTime ResolveCutoff(HomeRowContext context, int days)
+        => days > 0 ? context.UtcNow.AddDays(-days) : DateTime.MinValue;
 }

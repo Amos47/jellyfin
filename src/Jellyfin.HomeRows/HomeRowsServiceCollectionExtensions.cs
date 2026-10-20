@@ -1,6 +1,7 @@
 using System.Linq;
 using Jellyfin.HomeRows.Configuration;
 using Jellyfin.HomeRows.Providers;
+using Jellyfin.HomeRows.Providers.ContinueWatching;
 using Jellyfin.HomeRows.Sources;
 using MediaBrowser.Controller.Library;
 using Microsoft.Extensions.DependencyInjection;
@@ -39,6 +40,7 @@ public static class HomeRowsServiceCollectionExtensions
                 .First(p => p.Id == id));
         }
 
+        services.AddSingleton<IHomeRowProvider, ContinueWatchingProvider>();
         services.AddSingleton<IHomeRowProvider, LatestMediaProvider>();
         services.AddSingleton<IHomeRowProvider, LiveTvProvider>();
         services.AddSingleton<IHomeRowProvider, ActiveRecordingsProvider>();
