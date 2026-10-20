@@ -87,6 +87,15 @@ public class NewReleasesTests
     }
 
     [Fact]
+    public void Collapse_EpisodesWithoutSeries_AreKeptSeparately()
+    {
+        var a = Episode("Orphan A", Guid.Empty, 1, 1, _now.AddDays(-1));
+        var b = Episode("Orphan B", Guid.Empty, 1, 2, _now.AddDays(-2));
+
+        Assert.Equal(["Orphan A", "Orphan B"], Names(NewReleasesCollapser.Collapse([a, b])));
+    }
+
+    [Fact]
     public async Task Query_WindowUnwatchedAvailable()
     {
         var provider = CreateProvider();

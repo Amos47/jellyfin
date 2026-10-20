@@ -26,7 +26,7 @@ public static class NewReleasesCollapser
         var order = new List<Guid>();
         foreach (var item in newestFirst)
         {
-            var key = item is Episode { SeriesId: var seriesId } ? seriesId : item.Id;
+            var key = item is Episode { SeriesId: var seriesId } && !seriesId.Equals(Guid.Empty) ? seriesId : item.Id;
             if (!groups.TryGetValue(key, out var group))
             {
                 group = [];
