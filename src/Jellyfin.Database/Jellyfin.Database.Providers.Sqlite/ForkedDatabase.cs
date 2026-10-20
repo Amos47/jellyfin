@@ -24,7 +24,7 @@ public static class ForkedDatabase
     /// <summary>
     /// The file name of the marker that records the fork copy has been made.
     /// </summary>
-    public const string MarkerFileName = "custom-jelly.forked";
+    public const string MarkerFileName = ".custom-home-rows-forked";
 
     /// <summary>
     /// Gets the path of the fork's live database.
