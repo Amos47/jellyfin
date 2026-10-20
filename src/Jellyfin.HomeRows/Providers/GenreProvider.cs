@@ -112,20 +112,29 @@ public sealed class GenreProvider : IHomeRowProvider
             ? Math.Clamp(li, 1, MaxLimit)
             : DefaultLimit;
 
+        // The limit setting is the size of the row, so it caps the total as well as the page.
+        var remaining = limit - paging.StartIndex;
         var query = new InternalItemsQuery(context.User)
         {
             Recursive = true,
             IncludeItemTypes = [kind],
             Genres = [genre],
             OrderBy = [(sort, sort == ItemSortBy.SortName ? SortOrder.Ascending : SortOrder.Descending)],
-            Limit = Math.Min(limit, paging.Limit),
-            StartIndex = paging.StartIndex,
+            Limit = remaining > 0 ? Math.Min(paging.Limit, remaining) : 1,
+            StartIndex = remaining > 0 ? paging.StartIndex : 0,
             DtoOptions = context.DtoOptions
         };
 
         var result = _libraryManager.GetItemsResult(query);
+        var total = Math.Min(result.TotalRecordCount, limit);
+        if (remaining <= 0)
+        {
+            // Past the end of the capped row: the query above only supplied the total.
+            return Task.FromResult(new HomeRowResult([], total, presentation) { Title = genre });
+        }
+
         var items = _adapter.ToDtos(result.Items, context);
-        return Task.FromResult(new HomeRowResult(items, result.TotalRecordCount, presentation) { Title = genre });
+        return Task.FromResult(new HomeRowResult(items, total, presentation) { Title = genre });
     }
 
     private static string? GetString(JsonObject config, string key)

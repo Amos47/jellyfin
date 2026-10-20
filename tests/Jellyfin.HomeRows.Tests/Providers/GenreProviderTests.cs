@@ -27,7 +27,9 @@ public class GenreProviderTests
     private readonly List<InternalItemsQuery> _queries = [];
     private readonly List<InternalItemsQuery> _genreQueries = [];
 
-    private GenreProvider CreateProvider(params string[] genres)
+    private GenreProvider CreateProvider(params string[] genres) => CreateProvider(42, genres);
+
+    private GenreProvider CreateProvider(int matches, params string[] genres)
     {
         var tuples = genres
             .Select(g => ((BaseItem)new Genre { Name = g }, new ItemCounts()))
@@ -39,7 +41,7 @@ public class GenreProviderTests
         _libraryManager
             .Setup(l => l.GetItemsResult(It.IsAny<InternalItemsQuery>()))
             .Callback<InternalItemsQuery>(q => _queries.Add(q))
-            .Returns(new QueryResult<BaseItem>(5, 42, Array.Empty<BaseItem>()));
+            .Returns(new QueryResult<BaseItem>(5, matches, Array.Empty<BaseItem>()));
         _adapter
             .Setup(a => a.ToDtos(It.IsAny<IReadOnlyList<BaseItem>>(), It.IsAny<HomeRowContext>(), false))
             .Returns(Array.Empty<BaseItemDto>());
@@ -87,7 +89,7 @@ public class GenreProviderTests
         Assert.True(q.Recursive);
         Assert.Equal(10, q.Limit);
         Assert.Equal(3, q.StartIndex);
-        Assert.Equal(42, result.TotalRecordCount);
+        Assert.Equal(20, result.TotalRecordCount);
         Assert.Null(result.Error);
         Assert.Equal("Horror", result.Title);
     }
@@ -103,6 +105,52 @@ public class GenreProviderTests
         Assert.Equal(5, q.Limit);
         Assert.Equal(["horror"], q.Genres);
         Assert.Equal([BaseItemKind.Movie], q.IncludeItemTypes);
+    }
+
+    [Fact]
+    public async Task Limit_CapsTheTotalOfTheRow()
+    {
+        var provider = CreateProvider(500, "Horror");
+
+        var result = await Get(provider, new JsonObject { ["genre"] = "Horror", ["limit"] = 10 });
+
+        Assert.Equal(10, result.TotalRecordCount);
+        Assert.Equal(10, _queries.Single().Limit);
+    }
+
+    [Fact]
+    public async Task Limit_TotalIsGenreTotalWhenSmaller()
+    {
+        var provider = CreateProvider(4, "Horror");
+
+        var result = await Get(provider, new JsonObject { ["genre"] = "Horror", ["limit"] = 10 });
+
+        Assert.Equal(4, result.TotalRecordCount);
+    }
+
+    [Fact]
+    public async Task Limit_PagePartlyBeyondTheCapIsShortened()
+    {
+        var provider = CreateProvider(500, "Horror");
+
+        var result = await Get(provider, new JsonObject { ["genre"] = "Horror", ["limit"] = 10 }, start: 8, limit: 5);
+
+        var q = _queries.Single();
+        Assert.Equal(2, q.Limit);
+        Assert.Equal(8, q.StartIndex);
+        Assert.Equal(10, result.TotalRecordCount);
+    }
+
+    [Fact]
+    public async Task Limit_PageBeyondTheCapIsEmptyWithTheCappedTotal()
+    {
+        var provider = CreateProvider(500, "Horror");
+
+        var result = await Get(provider, new JsonObject { ["genre"] = "Horror", ["limit"] = 10 }, start: 10, limit: 5);
+
+        Assert.Empty(result.Items);
+        Assert.Equal(10, result.TotalRecordCount);
+        _adapter.Verify(a => a.ToDtos(It.IsAny<IReadOnlyList<BaseItem>>(), It.IsAny<HomeRowContext>(), It.IsAny<bool>()), Times.Never);
     }
 
     [Theory]
