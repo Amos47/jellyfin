@@ -107,6 +107,17 @@ public class UpstreamHomeSectionMapperTests
     }
 
     [Fact]
+    public void Map_SameTypeInDifferentOrders_KeepsEachRow()
+    {
+        var rows = UpstreamHomeSectionMapper.Map(
+            [Section(1, 0, HomeSectionType.Resume), Section(2, 3, HomeSectionType.Resume)],
+            []);
+
+        Assert.Equal(new[] { HomeRowProviderIds.Resume, HomeRowProviderIds.Resume }, rows.Select(r => r.Provider));
+        Assert.False(rows[0].Id.Equals(rows[1].Id));
+    }
+
+    [Fact]
     public void Map_MapsEveryType()
     {
         var types = new Dictionary<HomeSectionType, string>
