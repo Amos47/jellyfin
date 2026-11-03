@@ -65,34 +65,45 @@ public class UpstreamHomeSectionMapperTests
     }
 
     [Fact]
-    public void Map_SkipsNoneSortsByOrderThenIdAndHandlesDuplicatesAndGaps()
+    public void Map_SkipsNoneSortsByOrderAndHandlesGaps()
     {
         HomeSection[] sections =
         [
             Section(5, 2, HomeSectionType.NextUp),
             Section(1, 9, HomeSectionType.LiveTv),
             Section(2, 1, HomeSectionType.None),
-            Section(3, 2, HomeSectionType.Resume),
             Section(4, 0, HomeSectionType.SmallLibraryTiles),
         ];
 
         var rows = UpstreamHomeSectionMapper.Map(sections, [Guid.NewGuid()]);
 
         Assert.Equal(
-            new[] { HomeRowProviderIds.LibraryTiles, HomeRowProviderIds.Resume, HomeRowProviderIds.NextUp, HomeRowProviderIds.LiveTv },
+            new[] { HomeRowProviderIds.LibraryTiles, HomeRowProviderIds.NextUp, HomeRowProviderIds.LiveTv },
             rows.Select(r => r.Provider));
         Assert.Equal(rows.Count, rows.Select(r => r.Id).Distinct().Count());
     }
 
     [Fact]
-    public void Map_DuplicateSectionsOfOneType_GetDistinctIds()
+    public void Map_DuplicateOrders_LastWrittenSectionWinsLikeUpstream()
     {
-        var rows = UpstreamHomeSectionMapper.Map(
-            [Section(1, 3, HomeSectionType.Resume), Section(2, 3, HomeSectionType.Resume)],
-            []);
+        // Upstream accumulates duplicate HomeSection rows per order; its GET writes
+        // CustomPrefs["homesection" + Order] in id order, so the highest id wins each slot.
+        HomeSection[] sections =
+        [
+            Section(1, 0, HomeSectionType.LibraryButtons),
+            Section(2, 1, HomeSectionType.NextUp),
+            Section(3, 2, HomeSectionType.NextUp),
+            Section(4, 0, HomeSectionType.LibraryButtons),
+            Section(5, 1, HomeSectionType.Resume),
+            Section(6, 2, HomeSectionType.None),
+            Section(7, 0, HomeSectionType.LibraryButtons),
+        ];
 
-        Assert.Equal(2, rows.Count);
-        Assert.False(rows[0].Id.Equals(rows[1].Id));
+        var rows = UpstreamHomeSectionMapper.Map(sections, []);
+
+        Assert.Equal(
+            new[] { HomeRowProviderIds.LibraryButtons, HomeRowProviderIds.Resume },
+            rows.Select(r => r.Provider));
     }
 
     [Fact]

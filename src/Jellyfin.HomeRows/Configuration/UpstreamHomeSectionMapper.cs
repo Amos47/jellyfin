@@ -32,12 +32,12 @@ public static class UpstreamHomeSectionMapper
     ];
 
     /// <summary>
-    /// Maps home sections to rows. Sections are ordered by <see cref="HomeSection.Order"/>, then
-    /// <see cref="HomeSection.Id"/>; <see cref="HomeSectionType.None"/> is skipped; <see cref="HomeSectionType.LatestMedia"/>
+    /// Maps home sections to rows. Upstream can hold several sections with the same <see cref="HomeSection.Order"/>;
+    /// as in upstream's DisplayPreferences GET, the one with the highest <see cref="HomeSection.Id"/> wins each order.
+    /// Orders are then sorted; <see cref="HomeSectionType.None"/> is skipped; <see cref="HomeSectionType.LatestMedia"/>
     /// becomes one <see cref="HomeRowProviderIds.LatestMedia"/> row per latest view; the result is capped at
     /// <see cref="MaxRows"/>. Row ids are deterministic: the MD5 of <c>upstream:{position}:{provider}:{library}</c>,
-    /// where position is the section's index among the mapped (non-None) sections, so duplicate orders still give
-    /// unique ids, and library is the view id in "N" format, or empty.
+    /// where position is the section's index among the mapped (non-None) sections, and library is the view id in "N" format, or empty.
     /// </summary>
     /// <param name="sections">The user's home sections; empty means upstream's standard order.</param>
     /// <param name="latestViewIds">The ids of the views that get a latest media row, already filtered.</param>
@@ -49,7 +49,7 @@ public static class UpstreamHomeSectionMapper
 
         IEnumerable<HomeSectionType> types = sections.Count == 0
             ? _standardOrder
-            : sections.OrderBy(s => s.Order).ThenBy(s => s.Id).Select(s => s.Type);
+            : sections.GroupBy(s => s.Order).OrderBy(g => g.Key).Select(g => g.MaxBy(s => s.Id)!.Type);
 
         var rows = new List<HomeRowInstance>();
         var position = 0;
