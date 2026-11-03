@@ -11,6 +11,7 @@ using CommandLine;
 using Emby.Server.Implementations;
 using Emby.Server.Implementations.Configuration;
 using Emby.Server.Implementations.Serialization;
+using Jellyfin.Custom.Database;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Server.Extensions;
 using Jellyfin.Server.Helpers;
@@ -217,6 +218,7 @@ namespace Jellyfin.Server
                 // "Preparing migrations" carries through the DB read; per-migration progress is reported
                 // as "Running migration X of Y" from inside the step once the pending set is known.
                 _optimizeDatabaseAfterMigration |= await jellyfinMigrationService.MigrateStepAsync(JellyfinMigrationStageTypes.CoreInitialisation, appHost.ServiceProvider).ConfigureAwait(false);
+                await appHost.ServiceProvider.MigrateCustomDatabaseAsync().ConfigureAwait(false);
 
                 SetupServer.ReportActivity(StartupActivity.InitializingServices);
                 await appHost.InitializeServices(startupConfig).ConfigureAwait(false);
@@ -343,6 +345,11 @@ namespace Jellyfin.Server
         {
             var jellyfinMigrationService = ActivatorUtilities.CreateInstance<JellyfinMigrationService>(serviceProvider, _migrationLogger!);
             _optimizeDatabaseAfterMigration |= await jellyfinMigrationService.MigrateStepAsync(jellyfinMigrationStage, serviceProvider).ConfigureAwait(false);
+
+            if (jellyfinMigrationStage == JellyfinMigrationStageTypes.CoreInitialisation)
+            {
+                await serviceProvider.MigrateCustomDatabaseAsync().ConfigureAwait(false);
+            }
         }
 
         private static async Task OptimizeDatabaseAfterMigrationAsync(IServiceProvider serviceProvider)

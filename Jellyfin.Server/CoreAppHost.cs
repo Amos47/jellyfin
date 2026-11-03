@@ -8,10 +8,12 @@ using Jellyfin.Database.Implementations;
 using Jellyfin.Drawing;
 using Jellyfin.Drawing.Skia;
 using Jellyfin.LiveTv;
+using Jellyfin.Server.Extensions;
 using Jellyfin.Server.Implementations.Activity;
 using Jellyfin.Server.Implementations.Devices;
 using Jellyfin.Server.Implementations.Events;
 using Jellyfin.Server.Implementations.Extensions;
+using Jellyfin.Server.Implementations.FullSystemBackup;
 using Jellyfin.Server.Implementations.Security;
 using Jellyfin.Server.Implementations.Trickplay;
 using Jellyfin.Server.Implementations.Users;
@@ -78,6 +80,7 @@ namespace Jellyfin.Server
             serviceCollection.AddEventServices();
             serviceCollection.AddSingleton<IBaseItemManager, BaseItemManager>();
             serviceCollection.AddSingleton<IEventManager, EventManager>();
+            serviceCollection.AddSingleton<IBackupContributor, CustomDatabaseBackupContributor>();
 
             serviceCollection.AddSingleton<IActivityManager, ActivityManager>();
             serviceCollection.AddSingleton<IUserManager, UserManager>();
@@ -107,6 +110,8 @@ namespace Jellyfin.Server
             {
                 serviceCollection.AddSingleton(typeof(ILyricParser), type);
             }
+
+            serviceCollection.AddHomeRowsServer();
 
             base.RegisterServices(serviceCollection);
         }

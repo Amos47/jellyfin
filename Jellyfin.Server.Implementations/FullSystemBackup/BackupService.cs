@@ -35,6 +35,7 @@ public class BackupService : IBackupService
     private readonly IJellyfinDatabaseProvider _jellyfinDatabaseProvider;
     private readonly IHostApplicationLifetime _hostApplicationLifetime;
     private readonly ILibraryManager _libraryManager;
+    private readonly IEnumerable<IBackupContributor> _backupContributors;
     private static readonly JsonSerializerOptions _serializerSettings = new JsonSerializerOptions(JsonSerializerDefaults.General)
     {
         AllowTrailingCommas = true,
@@ -53,6 +54,7 @@ public class BackupService : IBackupService
     /// <param name="jellyfinDatabaseProvider">The Jellyfin database Provider in use.</param>
     /// <param name="applicationLifetime">The SystemManager.</param>
     /// <param name="libraryManager">Instance of the <see cref="ILibraryManager"/> interface.</param>
+    /// <param name="backupContributors">Additional contributors to the backup archive.</param>
     public BackupService(
         ILogger<BackupService> logger,
         IDbContextFactory<JellyfinDbContext> dbProvider,
@@ -60,7 +62,8 @@ public class BackupService : IBackupService
         IServerApplicationPaths applicationPaths,
         IJellyfinDatabaseProvider jellyfinDatabaseProvider,
         IHostApplicationLifetime applicationLifetime,
-        ILibraryManager libraryManager)
+        ILibraryManager libraryManager,
+        IEnumerable<IBackupContributor>? backupContributors = null)
     {
         _logger = logger;
         _dbProvider = dbProvider;
@@ -69,6 +72,7 @@ public class BackupService : IBackupService
         _jellyfinDatabaseProvider = jellyfinDatabaseProvider;
         _hostApplicationLifetime = applicationLifetime;
         _libraryManager = libraryManager;
+        _backupContributors = backupContributors ?? [];
     }
 
     /// <inheritdoc/>
@@ -247,6 +251,11 @@ public class BackupService : IBackupService
 
                     _logger.LogInformation("Try restore Database");
                     await dbContext.SaveChangesAsync().ConfigureAwait(false);
+                    foreach (var c in _backupContributors)
+                    {
+                        await c.RestoreAsync(zipArchive, CancellationToken.None).ConfigureAwait(false);
+                    }
+
                     _logger.LogInformation("Restored database");
                 }
             }
@@ -400,6 +409,11 @@ public class BackupService : IBackupService
                             }
 
                             _logger.LogInformation("Backup of entity {Table} with {Number} created", entityType.SourceName, entities);
+                        }
+
+                        foreach (var c in _backupContributors)
+                        {
+                            await c.WriteAsync(zipArchive, CancellationToken.None).ConfigureAwait(false);
                         }
                     }
                 }

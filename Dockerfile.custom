@@ -1,0 +1,23 @@
+# Custom Jellyfin server image: the official jellyfin/jellyfin:12.2 image with the
+# server binaries replaced by a build of this fork. ffmpeg, jellyfin-web, the
+# entrypoint and environment all come from the base image.
+#
+# Build (home lab, x86-64):
+#   docker buildx build --platform linux/amd64 --build-arg RID=linux-x64 \
+#       -f Dockerfile.custom -t jellyfin-custom:12.2-homerows .
+# Build (ARM host): --platform linux/arm64 --build-arg RID=linux-arm64
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+ARG RID=linux-x64
+WORKDIR /src
+COPY . .
+# The cache mount keeps downloaded NuGet packages between builds, so a flaky
+# network only costs a retry.
+RUN --mount=type=cache,target=/root/.nuget/packages \
+    dotnet publish Jellyfin.Server/Jellyfin.Server.csproj \
+    -c Release -r ${RID} --self-contained true -p:DebugType=none -o /out
+
+FROM jellyfin/jellyfin:12.2
+# Keep only the web client from the base image, replace everything else.
+RUN find /jellyfin -mindepth 1 -maxdepth 1 ! -name jellyfin-web -exec rm -rf {} +
+COPY --from=build /out/ /jellyfin/

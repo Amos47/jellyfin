@@ -63,7 +63,7 @@ public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
 
         var sqliteConnectionBuilder = new SqliteConnectionStringBuilder
         {
-            DataSource = GetOption(customOptions, "path", e => e, () => Path.Combine(_applicationPaths.DataPath, "jellyfin.db")),
+            DataSource = GetOption(customOptions, "path", e => ForkedDatabase.ResolveConfiguredPath(e, _logger), () => ForkedDatabase.Prepare(_applicationPaths.DataPath, _logger)),
             // Private, not Default: sqlite3_enable_shared_cache is process-global, so a plugin
             // enabling it makes these connections share a cache too. Contention then surfaces as
             // SQLITE_LOCKED ("database table is locked"), which the busy handler does not cover,
@@ -287,7 +287,7 @@ public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
     /// <inheritdoc />
     public async Task<string> MigrationBackupFast(CancellationToken cancellationToken)
     {
-        var path = Path.Combine(_applicationPaths.DataPath, "jellyfin.db");
+        var path = ForkedDatabase.GetPath(_applicationPaths.DataPath);
         var backupFolder = Path.Combine(_applicationPaths.DataPath, BackupFolderName);
         Directory.CreateDirectory(backupFolder);
 
@@ -317,7 +317,7 @@ public sealed class SqliteDatabaseProvider : IJellyfinDatabaseProvider
     {
         // ensure there are absolutely no dangling Sqlite connections.
         SqliteConnection.ClearAllPools();
-        var path = Path.Combine(_applicationPaths.DataPath, "jellyfin.db");
+        var path = ForkedDatabase.GetPath(_applicationPaths.DataPath);
         var backupFile = Path.Combine(_applicationPaths.DataPath, BackupFolderName, $"{key}_jellyfin.db");
 
         if (!File.Exists(backupFile))
