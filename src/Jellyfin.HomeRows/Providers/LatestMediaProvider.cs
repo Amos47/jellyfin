@@ -81,6 +81,7 @@ public sealed class LatestMediaProvider : IHomeRowProvider
             new LatestItemsQuery
             {
                 GroupItems = true,
+                IncludeItemTypes = [],
                 IsPlayed = context.User.HidePlayedInLatest ? false : null,
                 Limit = paging.Limit,
                 ParentId = library.Id,
