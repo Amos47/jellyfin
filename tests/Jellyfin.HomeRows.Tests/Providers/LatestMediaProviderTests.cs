@@ -89,6 +89,18 @@ public class LatestMediaProviderTests
     }
 
     [Fact]
+    public async Task Latest_PassesAnEmptyItemTypeList()
+    {
+        // UserViewManager.GetLatestItems reads IncludeItemTypes.Length; upstream's controller always passes an array.
+        var provider = CreateProvider();
+
+        await provider.GetItemsAsync(_context, Config(), new HomeRowPaging(0, 20), CancellationToken.None);
+
+        Assert.NotNull(_captured!.IncludeItemTypes);
+        Assert.Empty(_captured.IncludeItemTypes);
+    }
+
+    [Fact]
     public async Task Latest_GroupedTupleReturnsParent()
     {
         var parent = new Series { Id = Guid.NewGuid() };
