@@ -1,13 +1,17 @@
-# Custom Jellyfin server image: the official jellyfin/jellyfin:12.2 image with the
-# server binaries replaced by a build of this fork. ffmpeg, jellyfin-web, the
-# entrypoint and environment all come from the base image.
+# Custom Jellyfin server image: the official jellyfin/jellyfin:12.2 image with the server binaries replaced by a
+# build of this fork, and jellyfin-web replaced by a build of the web fork (~/Code/jellyfin-web, branch custom).
+# ffmpeg, the entrypoint and the environment come from the base image.
 #
-# Build (home lab, x86-64):
+# The web fork is passed as a named build context. Build (home lab, x86-64):
 #   docker buildx build --platform linux/amd64 --build-arg RID=linux-x64 \
-#       -f Dockerfile.custom -t jellyfin-custom:12.2-homerows .
+#       --build-context web=../jellyfin-web \
+#       -f Dockerfile.custom -t jellyfin-custom:12.2-homerows --load .
 # Build (ARM host): --platform linux/arm64 --build-arg RID=linux-arm64
+#
+# The server and web stages run on the build machine's own platform (no emulation); only the final image is for the
+# target platform. dotnet publish cross-compiles for ${RID}.
 
-FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+FROM --platform=$BUILDPLATFORM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 ARG RID=linux-x64
 WORKDIR /src
 COPY . .
@@ -17,7 +21,15 @@ RUN --mount=type=cache,target=/root/.nuget/packages \
     dotnet publish Jellyfin.Server/Jellyfin.Server.csproj \
     -c Release -r ${RID} --self-contained true -p:DebugType=none -o /out
 
+FROM --platform=$BUILDPLATFORM node:24 AS webbuild
+WORKDIR /web
+COPY --from=web package.json package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+COPY --from=web . .
+RUN npm run build:production
+
 FROM jellyfin/jellyfin:12.2
-# Keep only the web client from the base image, replace everything else.
-RUN find /jellyfin -mindepth 1 -maxdepth 1 ! -name jellyfin-web -exec rm -rf {} +
+# Replace everything in /jellyfin with the fork's server and web builds.
+RUN rm -rf /jellyfin/*
 COPY --from=build /out/ /jellyfin/
+COPY --from=webbuild /web/dist/ /jellyfin/jellyfin-web/
