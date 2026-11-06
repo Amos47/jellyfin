@@ -159,6 +159,19 @@ public sealed class TranscodingJob : IDisposable
     public int PingTimeout { get; set; }
 
     /// <summary>
+    /// Counts a segment request as a ping for segmented jobs, so a client downloading segments back to back (an
+    /// offline download, which never sends playback pings) keeps the job alive.
+    /// </summary>
+    /// <param name="now">The time of the request.</param>
+    public void OnSegmentRequested(DateTime now)
+    {
+        if (Type != TranscodingJobType.Progressive)
+        {
+            LastPingDate = now;
+        }
+    }
+
+    /// <summary>
     /// Records the end position of a served segment.
     /// </summary>
     /// <param name="segmentIndex">The segment index.</param>
