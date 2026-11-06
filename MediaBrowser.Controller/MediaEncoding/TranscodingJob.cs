@@ -154,6 +154,11 @@ public sealed class TranscodingJob : IDisposable
     public DateTime LastPingDate { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether the video is copied rather than encoded.
+    /// </summary>
+    public bool IsVideoCopy { get; set; }
+
+    /// <summary>
     /// Gets or sets ping timeout.
     /// </summary>
     public int PingTimeout { get; set; }

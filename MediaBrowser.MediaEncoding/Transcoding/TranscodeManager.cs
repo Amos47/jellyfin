@@ -598,7 +598,8 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
                 Id = transcodingJobId,
                 PlaySessionId = playSessionId,
                 LiveStreamId = liveStreamId,
-                MediaSource = state.MediaSource
+                MediaSource = state.MediaSource,
+                IsVideoCopy = EncodingHelper.IsCopyCodec(state.OutputVideoCodec)
             };
 
             _activeTranscodingJobs.Add(job);
@@ -681,6 +682,15 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
         if (state.MediaSource.BufferMs.HasValue)
         {
             await Task.Delay(state.MediaSource.BufferMs.Value, cancellationTokenSource.Token).ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
+    public bool IsDownloadConversionLimitReached(string? playSessionId)
+    {
+        lock (_activeTranscodingJobs)
+        {
+            return DownloadConversionLimit.IsAtLimit(_activeTranscodingJobs, playSessionId);
         }
     }
 

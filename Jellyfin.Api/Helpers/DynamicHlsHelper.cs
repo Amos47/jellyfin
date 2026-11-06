@@ -135,6 +135,15 @@ public class DynamicHlsHelper
                 cancellationTokenSource.Token)
             .ConfigureAwait(false);
 
+        // Offline downloads that need converting wait while the server already converts as many as it allows.
+        if (DownloadConversionLimit.IsDownloadSession(streamingRequest.PlaySessionId)
+            && !EncodingHelper.IsCopyCodec(state.OutputVideoCodec)
+            && _transcodeManager.IsDownloadConversionLimitReached(streamingRequest.PlaySessionId))
+        {
+            _httpContextAccessor.HttpContext.Response.Headers.Append(HeaderNames.RetryAfter, "30");
+            return new StatusCodeResult(StatusCodes.Status503ServiceUnavailable);
+        }
+
         _httpContextAccessor.HttpContext.Response.Headers.Append(HeaderNames.Expires, "0");
         if (isHeadRequest)
         {
