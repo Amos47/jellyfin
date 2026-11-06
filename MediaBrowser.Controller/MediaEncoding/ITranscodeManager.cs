@@ -90,6 +90,14 @@ public interface ITranscodeManager
     public TranscodingJob? OnTranscodeBeginRequest(string path, TranscodingJobType type);
 
     /// <summary>
+    /// Gets whether the server is already converting as many offline downloads as it allows
+    /// (<see cref="DownloadConversionLimit"/>).
+    /// </summary>
+    /// <param name="playSessionId">The play session asking to start; its own job doesn't count.</param>
+    /// <returns>Whether another download conversion must wait.</returns>
+    public bool IsDownloadConversionLimitReached(string? playSessionId);
+
+    /// <summary>
     /// Called when [transcode end].
     /// </summary>
     /// <param name="job">The transcode job.</param>
