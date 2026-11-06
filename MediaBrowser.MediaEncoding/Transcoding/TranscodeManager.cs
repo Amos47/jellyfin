@@ -698,6 +698,7 @@ public sealed class TranscodeManager : ITranscodeManager, IDisposable
             }
 
             job.IncrementActiveRequestCount();
+            job.OnSegmentRequested(DateTime.UtcNow);
             if (string.IsNullOrWhiteSpace(job.PlaySessionId) || job.Type == TranscodingJobType.Progressive)
             {
                 job.StopKillTimer();
