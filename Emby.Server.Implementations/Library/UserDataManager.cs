@@ -48,6 +48,9 @@ namespace Emby.Server.Implementations.Library
 
         /// <inheritdoc />
         public void SaveUserData(User user, BaseItem item, UserItemData userData, UserDataSaveReason reason, CancellationToken cancellationToken)
+            => SaveUserData(user, item, userData, reason, null, cancellationToken);
+
+        private void SaveUserData(User user, BaseItem item, UserItemData userData, UserDataSaveReason reason, bool? previouslyPlayed, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(userData);
 
@@ -104,7 +107,8 @@ namespace Emby.Server.Implementations.Library
                 UserData = userData,
                 SaveReason = reason,
                 UserId = user.Id,
-                Item = item
+                Item = item,
+                PreviouslyPlayed = previouslyPlayed
             });
         }
 
@@ -116,6 +120,10 @@ namespace Emby.Server.Implementations.Library
             ArgumentNullException.ThrowIfNull(userDataDto);
 
             var userData = GetUserData(user, item) ?? throw new InvalidOperationException("UserData should not be null.");
+
+            // Fork: the rewatch marker needs to know whether an API update (an offline download syncing) replays an
+            // episode that was already watched.
+            var previouslyPlayed = userData.Played;
 
             if (userDataDto.PlaybackPositionTicks.HasValue)
             {
@@ -152,7 +160,7 @@ namespace Emby.Server.Implementations.Library
                 userData.Rating = userDataDto.Rating.Value;
             }
 
-            SaveUserData(user, item, userData, reason, CancellationToken.None);
+            SaveUserData(user, item, userData, reason, previouslyPlayed, CancellationToken.None);
         }
 
         private UserData Map(UserItemData dto, Guid userId, Guid itemId)
