@@ -47,7 +47,7 @@ public sealed class RewatchCandidateFinderTests : IDisposable
         var library = new Mock<ILibraryManager>();
         library.Setup(l => l.GetItemList(It.IsAny<InternalItemsQuery>())).Returns(() => _episodes.Cast<BaseItem>().ToList());
 
-        _finder = new RewatchCandidateFinder(library.Object, _userData.Object, _store);
+        _finder = new RewatchCandidateFinder(library.Object, _userData.Object, _store, NullLogger<RewatchCandidateFinder>.Instance);
     }
 
     public void Dispose() => Directory.Delete(_dataPath, true);
@@ -104,5 +104,18 @@ public sealed class RewatchCandidateFinderTests : IDisposable
         Mark(S3(7));
         Assert.Null(Candidate(Frontier(27, 7)));
         Assert.Null(_store.Get(_user.Id, SeriesKey));
+    }
+
+    [Fact]
+    public void StoreFailure_NoCandidate()
+    {
+        var store = new Mock<IRewatchMarkerStore>();
+        store.Setup(s => s.Get(It.IsAny<Guid>(), It.IsAny<string>())).Returns(new RewatchMarker(SeriesKey, Guid.NewGuid(), MarkerDate));
+        store.Setup(s => s.Remove(It.IsAny<Guid>(), It.IsAny<string>())).Throws(new UnauthorizedAccessException("read-only"));
+        var library = new Mock<ILibraryManager>();
+        library.Setup(l => l.GetItemList(It.IsAny<InternalItemsQuery>())).Returns(_episodes.Cast<BaseItem>().ToList());
+        var finder = new RewatchCandidateFinder(library.Object, _userData.Object, store.Object, NullLogger<RewatchCandidateFinder>.Instance);
+
+        Assert.Null(finder.GetCandidate(_user, SeriesKey, Frontier(27, 7), new DtoOptions()));
     }
 }

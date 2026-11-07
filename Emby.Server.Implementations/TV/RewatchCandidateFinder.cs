@@ -6,6 +6,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.TV;
+using Microsoft.Extensions.Logging;
 
 namespace Emby.Server.Implementations.TV;
 
@@ -17,6 +18,7 @@ public sealed class RewatchCandidateFinder : IRewatchCandidateFinder
     private readonly ILibraryManager _libraryManager;
     private readonly IUserDataManager _userDataManager;
     private readonly IRewatchMarkerStore _store;
+    private readonly ILogger<RewatchCandidateFinder> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RewatchCandidateFinder"/> class.
@@ -24,8 +26,10 @@ public sealed class RewatchCandidateFinder : IRewatchCandidateFinder
     /// <param name="libraryManager">The library manager.</param>
     /// <param name="userDataManager">The user data manager.</param>
     /// <param name="store">The rewatch marker store.</param>
-    public RewatchCandidateFinder(ILibraryManager libraryManager, IUserDataManager userDataManager, IRewatchMarkerStore store)
+    /// <param name="logger">The logger.</param>
+    public RewatchCandidateFinder(ILibraryManager libraryManager, IUserDataManager userDataManager, IRewatchMarkerStore store, ILogger<RewatchCandidateFinder> logger)
     {
+        _logger = logger;
         _libraryManager = libraryManager;
         _userDataManager = userDataManager;
         _store = store;
@@ -36,6 +40,20 @@ public sealed class RewatchCandidateFinder : IRewatchCandidateFinder
     {
         ArgumentNullException.ThrowIfNull(user);
 
+        // A broken marker file must never break Next Up and Home
+        try
+        {
+            return FindCandidate(user, seriesKey, frontier, options);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to find the rewatch episode for {SeriesKey}", seriesKey);
+            return null;
+        }
+    }
+
+    private (Episode Episode, DateTime Date)? FindCandidate(User user, string seriesKey, BaseItem? frontier, DtoOptions options)
+    {
         if (_store.Get(user.Id, seriesKey) is not { } marker)
         {
             return null;

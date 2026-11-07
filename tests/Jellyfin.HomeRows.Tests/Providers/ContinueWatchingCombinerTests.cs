@@ -150,4 +150,15 @@ public class ContinueWatchingCombinerTests
 
         Assert.Equal(["SVU S03E05"], Names(result));
     }
+
+    [Fact]
+    public void ResumeNew_BeatsMoreRecentResumeRewatch()
+    {
+        var rewatch = Played("SVU S03E05", _svu, _now.AddHours(-1));
+        var halfWatchedNew = Ep("SVU S27E08", _svu, _now.AddHours(-2));
+
+        var result = ContinueWatchingCombiner.Combine([rewatch, halfWatchedNew], [], [rewatch, halfWatchedNew]);
+
+        Assert.Equal(["SVU S27E08"], Names(result));
+    }
 }
