@@ -62,4 +62,28 @@ public class RewatchRulesTests
         Assert.True(new EpisodePosition(3, 2) > new EpisodePosition(3, 1));
         Assert.True(new EpisodePosition(3, 1) >= new EpisodePosition(3, 1));
     }
+
+    [Fact]
+    public void NewEpisodeResumable_NoRewatchCard()
+        => Assert.Equal(NextUpPick.None, RewatchRules.Pick(hasNewEpisode: true, newEpisodeResumable: true, enableResumable: false, hasRewatchCandidate: true, includeStockRewatching: true));
+
+    [Fact]
+    public void NewEpisodeResumable_ShownWhenResumableAllowed()
+        => Assert.Equal(NextUpPick.NewEpisode, RewatchRules.Pick(hasNewEpisode: true, newEpisodeResumable: true, enableResumable: true, hasRewatchCandidate: true, includeStockRewatching: false));
+
+    [Fact]
+    public void NewEpisode_BeatsRewatch()
+        => Assert.Equal(NextUpPick.NewEpisode, RewatchRules.Pick(hasNewEpisode: true, newEpisodeResumable: false, enableResumable: false, hasRewatchCandidate: true, includeStockRewatching: true));
+
+    [Fact]
+    public void CaughtUp_Rewatch()
+        => Assert.Equal(NextUpPick.Rewatch, RewatchRules.Pick(hasNewEpisode: false, newEpisodeResumable: false, enableResumable: false, hasRewatchCandidate: true, includeStockRewatching: true));
+
+    [Fact]
+    public void CaughtUp_NoMarker_StockOn()
+        => Assert.Equal(NextUpPick.StockRewatch, RewatchRules.Pick(hasNewEpisode: false, newEpisodeResumable: false, enableResumable: false, hasRewatchCandidate: false, includeStockRewatching: true));
+
+    [Fact]
+    public void CaughtUp_NoMarker_StockOff()
+        => Assert.Equal(NextUpPick.None, RewatchRules.Pick(hasNewEpisode: false, newEpisodeResumable: false, enableResumable: false, hasRewatchCandidate: false, includeStockRewatching: false));
 }

@@ -2,9 +2,6 @@ using System;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using Jellyfin.Data.Enums;
-using Jellyfin.Database.Implementations.Entities;
-using Jellyfin.Database.Implementations.Enums;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
@@ -47,25 +44,6 @@ public sealed class RewatchMarkerRecorder : IHostedService
         _store = store;
         _logger = logger;
     }
-
-    /// <summary>
-    /// Gets the query for the highest-numbered played episode in a series, the frontier.
-    /// </summary>
-    /// <param name="user">The user.</param>
-    /// <param name="seriesKey">The series presentation unique key.</param>
-    /// <returns>The query.</returns>
-    internal static InternalItemsQuery FrontierQuery(User user, string seriesKey)
-        => new(user)
-        {
-            IncludeItemTypes = [BaseItemKind.Episode],
-            SeriesPresentationUniqueKey = seriesKey,
-            ParentIndexNumberNotEquals = 0,
-            IsPlayed = true,
-            IsVirtualItem = false,
-            Recursive = true,
-            OrderBy = [(ItemSortBy.ParentIndexNumber, SortOrder.Descending), (ItemSortBy.IndexNumber, SortOrder.Descending)],
-            Limit = 1
-        };
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
@@ -118,7 +96,7 @@ public sealed class RewatchMarkerRecorder : IHostedService
             return;
         }
 
-        var frontier = EpisodePosition.From(_libraryManager.GetItemList(FrontierQuery(user, seriesKey)).FirstOrDefault() as Episode);
+        var frontier = EpisodePosition.From(_libraryManager.GetItemList(RewatchQueries.Frontier(user, seriesKey)).FirstOrDefault() as Episode);
         if (!RewatchRules.IsRewatchPlay(position, frontier))
         {
             return;

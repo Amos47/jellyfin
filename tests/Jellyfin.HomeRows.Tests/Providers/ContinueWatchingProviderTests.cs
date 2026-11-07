@@ -16,6 +16,7 @@ using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
+using MediaBrowser.Controller.TV;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Querying;
 using Moq;
@@ -28,7 +29,8 @@ public class ContinueWatchingProviderTests
     private readonly Mock<NextUpSource> _source = new(
         new Mock<IUserDataManager>().Object,
         new Mock<ILibraryManager>().Object,
-        new Mock<IServerConfigurationManager>().Object);
+        new Mock<IServerConfigurationManager>().Object,
+        new Mock<IRewatchCandidateFinder>().Object);
 
     private readonly Mock<ILibraryManager> _libraryManager = new();
     private readonly Mock<IUserDataManager> _userData = new();

@@ -51,4 +51,29 @@ public static class RewatchRules
             UserDataSaveReason.UpdateUserData => previouslyPlayed == true && (played || positionTicks >= MinimumRewatchTicks),
             _ => false
         };
+
+    /// <summary>
+    /// Picks one Next Up card for a series. A new episode always wins and also blocks the rewatch card when it's
+    /// partly watched and so left to Continue Watching; the rewatch marker comes next, then stock rewatching.
+    /// </summary>
+    /// <param name="hasNewEpisode">Whether there's a new episode after the frontier.</param>
+    /// <param name="newEpisodeResumable">Whether that new episode is partly watched.</param>
+    /// <param name="enableResumable">Whether the request includes partly watched episodes.</param>
+    /// <param name="hasRewatchCandidate">Whether the rewatch marker offers an episode.</param>
+    /// <param name="includeStockRewatching">Whether the request asks for stock rewatching.</param>
+    /// <returns>The card to show.</returns>
+    public static NextUpPick Pick(bool hasNewEpisode, bool newEpisodeResumable, bool enableResumable, bool hasRewatchCandidate, bool includeStockRewatching)
+    {
+        if (hasNewEpisode)
+        {
+            return enableResumable || !newEpisodeResumable ? NextUpPick.NewEpisode : NextUpPick.None;
+        }
+
+        if (hasRewatchCandidate)
+        {
+            return NextUpPick.Rewatch;
+        }
+
+        return includeStockRewatching ? NextUpPick.StockRewatch : NextUpPick.None;
+    }
 }
