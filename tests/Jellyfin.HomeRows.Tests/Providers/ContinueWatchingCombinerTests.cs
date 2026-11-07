@@ -20,6 +20,9 @@ public class ContinueWatchingCombinerTests
     private static ContinueWatchingCandidate Ep(string name, Guid series, DateTime? lastPlayed = null)
         => new(new Episode { Id = Guid.NewGuid(), Name = name, SeriesId = series }, series, lastPlayed);
 
+    private static ContinueWatchingCandidate Played(string name, Guid series, DateTime? lastPlayed = null)
+        => Ep(name, series, lastPlayed) with { IsPlayed = true };
+
     private static ContinueWatchingCandidate Mov(string name, DateTime? lastPlayed = null)
         => new(new Movie { Id = Guid.NewGuid(), Name = name }, null, lastPlayed);
 
@@ -113,5 +116,38 @@ public class ContinueWatchingCombinerTests
         var result = ContinueWatchingCombiner.Combine([recent, older], [], []);
 
         Assert.Equal(["SVU S04E08"], Names(result));
+    }
+
+    [Fact]
+    public void ResumeRewatch_LosesToNewNextUp()
+    {
+        var rewatch = Played("SVU S03E05", _svu, _now.AddHours(-1));
+        var next = Ep("SVU S27E08", _svu);
+
+        var result = ContinueWatchingCombiner.Combine([rewatch], [next], [rewatch]);
+
+        Assert.Equal(["SVU S27E08"], Names(result));
+    }
+
+    [Fact]
+    public void ResumeFirstWatch_StillWins()
+    {
+        var inProgress = Ep("SVU S27E08", _svu, _now.AddHours(-1));
+        var next = Ep("SVU S27E09", _svu);
+
+        var result = ContinueWatchingCombiner.Combine([inProgress], [next], [inProgress]);
+
+        Assert.Equal(["SVU S27E08"], Names(result));
+    }
+
+    [Fact]
+    public void ResumeRewatch_NoNewEpisode_Kept()
+    {
+        var rewatch = Played("SVU S03E05", _svu, _now.AddHours(-1));
+        var rewatchNext = Played("SVU S03E05", _svu);
+
+        var result = ContinueWatchingCombiner.Combine([rewatch], [rewatchNext], [rewatch]);
+
+        Assert.Equal(["SVU S03E05"], Names(result));
     }
 }
