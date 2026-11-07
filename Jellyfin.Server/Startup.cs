@@ -8,6 +8,7 @@ using System.Net.Mime;
 using System.Text;
 using Emby.Server.Implementations.EntryPoints;
 using Emby.Server.Implementations.Localization;
+using Emby.Server.Implementations.TV;
 using Jellyfin.Api.Middleware;
 using Jellyfin.Custom.Database;
 using Jellyfin.Database.Implementations;
@@ -157,6 +158,7 @@ namespace Jellyfin.Server
             services.AddHostedService<NfoUserDataSaver>();
             services.AddHostedService<LibraryChangedNotifier>();
             services.AddHostedService<UserDataChangeNotifier>();
+            services.AddHostedService<RewatchMarkerRecorder>();
             services.AddHostedService<RecordingNotifier>();
             services.AddHostedService<DeviceAccessHost>();
         }

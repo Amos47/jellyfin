@@ -12,6 +12,7 @@ using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.TV;
 using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Querying;
@@ -25,7 +26,8 @@ public class NextUpProviderTests
     private readonly Mock<NextUpSource> _source = new(
         new Mock<IUserDataManager>().Object,
         new Mock<ILibraryManager>().Object,
-        new Mock<IServerConfigurationManager>().Object);
+        new Mock<IServerConfigurationManager>().Object,
+        new Mock<IRewatchCandidateFinder>().Object);
 
     private readonly Mock<IHomeRowItemAdapter> _adapter = new();
     private readonly HomeRowContext _context = new(new User("tester", "Default", "Default"), new DtoOptions(), new DateTime(2026, 10, 19, 0, 0, 0, DateTimeKind.Utc));

@@ -592,6 +592,8 @@ namespace Emby.Server.Implementations
 
             serviceCollection.AddSingleton<IImageProcessor, ImageProcessor>();
 
+            serviceCollection.AddSingleton<IRewatchMarkerStore, RewatchMarkerStore>();
+            serviceCollection.AddSingleton<IRewatchCandidateFinder, RewatchCandidateFinder>();
             serviceCollection.AddSingleton<ITVSeriesManager, TVSeriesManager>();
 
             serviceCollection.AddSingleton<IMediaSourceManager, MediaSourceManager>();

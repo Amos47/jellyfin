@@ -177,6 +177,7 @@ public sealed class ContinueWatchingProvider : IHomeRowProvider
     private ContinueWatchingCandidate ToCandidate(User user, BaseItem item)
     {
         Guid? seriesId = item is Episode { SeriesId: var id } && !id.Equals(Guid.Empty) ? id : null;
-        return new ContinueWatchingCandidate(item, seriesId, _userDataManager.GetUserData(user, item)?.LastPlayedDate);
+        var userData = _userDataManager.GetUserData(user, item);
+        return new ContinueWatchingCandidate(item, seriesId, userData?.LastPlayedDate, userData?.Played == true);
     }
 }

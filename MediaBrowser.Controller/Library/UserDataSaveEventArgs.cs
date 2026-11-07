@@ -39,5 +39,12 @@ namespace MediaBrowser.Controller.Library
         /// </summary>
         /// <value>The item.</value>
         public BaseItem Item { get; set; }
+
+        /// <summary>
+        /// Gets or sets whether the item was played before this save. Fork: set only for API updates
+        /// (<see cref="UserDataSaveReason.UpdateUserData"/> and other dto saves); null otherwise.
+        /// </summary>
+        /// <value>Whether the item was played before the save.</value>
+        public bool? PreviouslyPlayed { get; set; }
     }
 }

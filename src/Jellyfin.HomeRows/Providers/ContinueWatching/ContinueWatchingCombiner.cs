@@ -58,11 +58,22 @@ public static class ContinueWatchingCombiner
         var entries = new List<(BaseItem Item, DateTime? Date)>();
         var handledSeries = new HashSet<Guid>();
 
+        // Fork: a half-watched new episode wins over a rewatch in progress, however recently that was played
+        var seriesWithNewInProgress = resume
+            .Where(c => !c.IsPlayed && c.SeriesId is not null)
+            .Select(c => c.SeriesId!.Value)
+            .ToHashSet();
+
         foreach (var candidate in resume)
         {
             if (candidate.SeriesId is not { } seriesId)
             {
                 entries.Add((candidate.Item, candidate.LastPlayed));
+                continue;
+            }
+
+            if (candidate.IsPlayed && seriesWithNewInProgress.Contains(seriesId))
+            {
                 continue;
             }
 
@@ -74,7 +85,14 @@ public static class ContinueWatchingCombiner
             var resumeDate = candidate.LastPlayed;
             DateTime? playedDate = seriesActivity.TryGetValue(seriesId, out var activity) ? activity : null;
 
-            if (nextUpBySeries.TryGetValue(seriesId, out var nextUpCandidate)
+            if (candidate.IsPlayed
+                && nextUpBySeries.TryGetValue(seriesId, out var newEpisode)
+                && !newEpisode.IsPlayed)
+            {
+                // Fork: a new episode wins over a rewatch in progress
+                entries.Add((newEpisode.Item, resumeDate ?? playedDate));
+            }
+            else if (nextUpBySeries.TryGetValue(seriesId, out var nextUpCandidate)
                 && resumeDate is { } rd
                 && playedDate is { } pd
                 && pd > rd)

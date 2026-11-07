@@ -9,7 +9,9 @@ using Jellyfin.Database.Implementations.Locking;
 using Jellyfin.Database.Providers.Sqlite;
 using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Configuration;
+using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
@@ -245,6 +247,26 @@ public sealed class UserDataManagerTests : IDisposable
                 Assert.Equal(0, row.PlaybackPositionTicks);
             });
         }
+    }
+
+    [Fact]
+    public void SaveUserDataDto_SetsPreviouslyPlayed()
+    {
+        var item = CreateAudioBook();
+        using (var ctx = CreateDbContext())
+        {
+            ctx.Users.Add(_user);
+            ctx.BaseItems.Add(new BaseItemEntity { Id = item.Id, Type = typeof(AudioBook).FullName! });
+            ctx.SaveChanges();
+        }
+
+        _userDataManager.SaveUserData(_user, item, new UpdateUserItemDataDto { Played = true }, UserDataSaveReason.UpdateUserData);
+
+        UserDataSaveEventArgs? saved = null;
+        _userDataManager.UserDataSaved += (_, e) => saved = e;
+        _userDataManager.SaveUserData(_user, item, new UpdateUserItemDataDto { PlaybackPositionTicks = 100 }, UserDataSaveReason.UpdateUserData);
+
+        Assert.True(saved?.PreviouslyPlayed);
     }
 
     [Fact]

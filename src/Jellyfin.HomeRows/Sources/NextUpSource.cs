@@ -13,6 +13,7 @@ using MediaBrowser.Controller.Configuration;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.TV;
 using MediaBrowser.Model.Querying;
 using Episode = MediaBrowser.Controller.Entities.TV.Episode;
 using Series = MediaBrowser.Controller.Entities.TV.Series;
@@ -27,6 +28,7 @@ public class NextUpSource
     private readonly IUserDataManager _userDataManager;
     private readonly ILibraryManager _libraryManager;
     private readonly IServerConfigurationManager _configurationManager;
+    private readonly IRewatchCandidateFinder _rewatchCandidateFinder;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="NextUpSource"/> class.
@@ -34,8 +36,10 @@ public class NextUpSource
     /// <param name="userDataManager">The user data manager.</param>
     /// <param name="libraryManager">The library manager.</param>
     /// <param name="configurationManager">The configuration manager.</param>
-    public NextUpSource(IUserDataManager userDataManager, ILibraryManager libraryManager, IServerConfigurationManager configurationManager)
+    /// <param name="rewatchCandidateFinder">The rewatch candidate finder.</param>
+    public NextUpSource(IUserDataManager userDataManager, ILibraryManager libraryManager, IServerConfigurationManager configurationManager, IRewatchCandidateFinder rewatchCandidateFinder)
     {
+        _rewatchCandidateFinder = rewatchCandidateFinder;
         _userDataManager = userDataManager;
         _libraryManager = libraryManager;
         _configurationManager = configurationManager;
@@ -147,9 +151,17 @@ public class NextUpSource
                 continue;
             }
 
-            var nextEpisode = DetermineNextEpisode(result, user, includeSpecials, request.EnableResumable, false);
+            // Fork: one card per series. A new episode always wins, then the rewatch marker, then stock rewatching.
+            var nextEpisode = DetermineNextEpisode(result, user, includeSpecials, true, false);
+            var rewatch = nextEpisode is null ? _rewatchCandidateFinder.GetCandidate(user, seriesKey, result.LastWatched, dtoOptions) : null;
+            var pick = RewatchRules.Pick(
+                nextEpisode is not null,
+                nextEpisode is not null && HasResumePosition(nextEpisode, user),
+                request.EnableResumable,
+                rewatch is not null,
+                includeRewatching);
 
-            if (nextEpisode is not null)
+            if (pick == NextUpPick.NewEpisode && nextEpisode is not null)
             {
                 // The last played date and the version that was actually played live on the version item's user data
                 // The played state propagated to the sibling versions carries no date
@@ -164,8 +176,11 @@ public class NextUpSource
 
                 nextUpList.Add((lastWatchedDate, nextEpisode));
             }
-
-            if (includeRewatching)
+            else if (pick == NextUpPick.Rewatch && rewatch is { } marked)
+            {
+                nextUpList.Add((marked.Date, marked.Episode));
+            }
+            else if (pick == NextUpPick.StockRewatch)
             {
                 var nextPlayedEpisode = DetermineNextEpisodeForRewatching(result, user, includeSpecials);
 
@@ -238,19 +253,26 @@ public class NextUpSource
             }
         }
 
-        if (nextEpisode is not null && !includeResumable)
+        if (nextEpisode is not null && !includeResumable && HasResumePosition(nextEpisode, user))
         {
-            // The resume progress may live on an alternate version
-            foreach (var version in nextEpisode.GetAllVersions())
-            {
-                if (_userDataManager.GetUserData(user, version)?.PlaybackPositionTicks > 0)
-                {
-                    return null;
-                }
-            }
+            return null;
         }
 
         return nextEpisode;
+    }
+
+    private bool HasResumePosition(Episode episode, User user)
+    {
+        // The resume progress may live on an alternate version
+        foreach (var version in episode.GetAllVersions())
+        {
+            if (_userDataManager.GetUserData(user, version)?.PlaybackPositionTicks > 0)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private Episode? DetermineNextEpisodeForRewatching(
