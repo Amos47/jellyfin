@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Jellyfin.Api.Helpers;
 using Jellyfin.Api.Models.ItemActionDtos;
 using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Extensions;
 using MediaBrowser.Controller.Discovery;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
@@ -111,7 +112,9 @@ public class ItemActionsController : BaseJellyfinApiController
     // The item as the detail endpoint resolves it for the user, so a hidden or restricted item is a 404 here too.
     private (User User, BaseItem Item)? Resolve(Guid itemId)
     {
-        var user = _userManager.GetUserById(RequestHelpers.GetUserId(User, null));
+        // An API key has no user (empty id), and GetUserById throws on an empty id: answer 404 as documented.
+        var userId = RequestHelpers.GetUserId(User, null);
+        var user = userId.IsEmpty() ? null : _userManager.GetUserById(userId);
         if (user is null)
         {
             return null;
