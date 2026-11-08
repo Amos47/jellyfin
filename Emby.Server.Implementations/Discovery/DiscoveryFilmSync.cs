@@ -128,7 +128,7 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
         }
 
         // A normal user query: the discovery guard keeps the virtual films out, so only library films match.
-        return _libraryManager.GetItemList(new InternalItemsQuery(user)
+        var owned = _libraryManager.GetItemList(new InternalItemsQuery(user)
         {
             IncludeItemTypes = [BaseItemKind.Movie],
             Recursive = true,
@@ -136,7 +136,8 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
             HasAnyProviderId = providerIds,
             Limit = 1,
             DtoOptions = new DtoOptions(false),
-        }).FirstOrDefault();
+        });
+        return owned.Count > 0 ? owned[0] : null;
     }
 
     private Guid GetFilmId(int tmdbId)
