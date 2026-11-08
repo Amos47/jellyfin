@@ -23,16 +23,19 @@ public partial class DiscoveryController : BaseJellyfinApiController
 {
     private readonly IDiscoveryStore _store;
     private readonly IDiscoveryFilmSync _filmSync;
+    private readonly IDiscoveryTrailers _trailers;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DiscoveryController"/> class.
     /// </summary>
     /// <param name="store">Instance of the <see cref="IDiscoveryStore"/> interface.</param>
     /// <param name="filmSync">Instance of the <see cref="IDiscoveryFilmSync"/> interface.</param>
-    public DiscoveryController(IDiscoveryStore store, IDiscoveryFilmSync filmSync)
+    /// <param name="trailers">Instance of the <see cref="IDiscoveryTrailers"/> interface.</param>
+    public DiscoveryController(IDiscoveryStore store, IDiscoveryFilmSync filmSync, IDiscoveryTrailers trailers)
     {
         _store = store;
         _filmSync = filmSync;
+        _trailers = trailers;
     }
 
     /// <summary>
@@ -133,6 +136,52 @@ public partial class DiscoveryController : BaseJellyfinApiController
         }
 
         await _filmSync.SyncAsync(cancellationToken).ConfigureAwait(false);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Makes a file the trailer of a discovery film, replacing the trailer it had. The file must be inside the
+    /// configured trailer folder; it is never changed or deleted.
+    /// </summary>
+    /// <param name="tmdbId">The TMDB id of the film.</param>
+    /// <param name="trailer">The trailer file.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="204">Trailer attached.</response>
+    /// <response code="400">No trailer folder is configured, or the path is not a file inside it.</response>
+    /// <response code="404">There is no discovery film with that TMDB id.</response>
+    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    [HttpPut("Films/{tmdbId}/Trailer")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult> SetTrailer(
+        [FromRoute, Required] int tmdbId,
+        [FromBody, Required] DiscoveryTrailerUpdateDto trailer,
+        CancellationToken cancellationToken)
+    {
+        var result = await _trailers.SetAsync(tmdbId, trailer.Path ?? string.Empty, cancellationToken).ConfigureAwait(false);
+        return result switch
+        {
+            DiscoveryTrailerResult.Set => NoContent(),
+            DiscoveryTrailerResult.FilmNotFound => NotFound(),
+            DiscoveryTrailerResult.NoTrailerRoot => BadRequest("No trailer folder is configured."),
+            DiscoveryTrailerResult.PathInUse => BadRequest("The file is already a library item."),
+            _ => BadRequest("The path must be an existing file inside the trailer folder."),
+        };
+    }
+
+    /// <summary>
+    /// Removes the trailer of a discovery film. The file stays on disk.
+    /// </summary>
+    /// <param name="tmdbId">The TMDB id of the film.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="204">Trailer removed, or there was none.</response>
+    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    [HttpDelete("Films/{tmdbId}/Trailer")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<ActionResult> DeleteTrailer([FromRoute, Required] int tmdbId, CancellationToken cancellationToken)
+    {
+        await _trailers.RemoveAsync(tmdbId, cancellationToken).ConfigureAwait(false);
         return NoContent();
     }
 

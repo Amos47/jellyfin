@@ -140,17 +140,21 @@ public sealed class DiscoveryGuardTests : IClassFixture<JellyfinApplicationFacto
     }
 
     [Fact]
-    public async Task Repository_ExtraOfDiscoveryFilm_ExcludedUnlessIncluded()
+    public async Task Repository_ExtraOfDiscoveryFilm_ExcludedUnlessIncludedOrByOwner()
     {
         var seed = await DiscoverySeed.EnsureAsync(_factory);
         var libraryManager = _factory.Services.GetRequiredService<ILibraryManager>();
 
-        var hidden = libraryManager.GetItemList(new InternalItemsQuery { OwnerIds = [seed.SeedFilm.Id] });
+        // Asking for the extras of an owner the caller already holds is like asking by id: the film page's local
+        // trailers (BaseItem.GetExtras) need it.
+        var byOwner = libraryManager.GetItemList(new InternalItemsQuery { OwnerIds = [seed.SeedFilm.Id] });
         var included = libraryManager.GetItemList(new InternalItemsQuery { IncludeDiscovery = true, OwnerIds = [seed.SeedFilm.Id] });
         var byType = libraryManager.GetItemList(new InternalItemsQuery { IncludeItemTypes = [BaseItemKind.Trailer], Recursive = true });
+        var all = libraryManager.GetItemList(new InternalItemsQuery { Recursive = true });
 
-        Assert.DoesNotContain(hidden, i => i.Id.Equals(seed.SeedTrailer.Id));
+        Assert.Contains(byOwner, i => i.Id.Equals(seed.SeedTrailer.Id));
         Assert.DoesNotContain(byType, i => i.Id.Equals(seed.SeedTrailer.Id));
+        Assert.DoesNotContain(all, i => i.Id.Equals(seed.SeedTrailer.Id));
         Assert.Contains(included, i => i.Id.Equals(seed.SeedTrailer.Id));
     }
 

@@ -160,6 +160,10 @@ namespace Jellyfin.Server.Integration.Tests
             public void QueueRefresh(Guid itemId)
             {
             }
+
+            public void QueueProbe(Guid itemId)
+            {
+            }
         }
 
         private sealed class NullStartupLogger<TCategory> : IStartupLogger<TCategory>

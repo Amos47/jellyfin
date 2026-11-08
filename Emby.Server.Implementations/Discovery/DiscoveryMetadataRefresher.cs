@@ -7,7 +7,7 @@ namespace Emby.Server.Implementations.Discovery;
 
 /// <summary>
 /// Fork: queues a full metadata and image refresh through the provider manager, so the built-in TMDB provider fills
-/// in a new discovery film.
+/// in a new discovery film; and a default refresh of a pushed trailer, so its file gets probed.
 /// </summary>
 public class DiscoveryMetadataRefresher : IDiscoveryMetadataRefresher
 {
@@ -36,4 +36,8 @@ public class DiscoveryMetadataRefresher : IDiscoveryMetadataRefresher
         };
         _providerManager.QueueRefresh(itemId, options, RefreshPriority.Normal);
     }
+
+    /// <inheritdoc />
+    public void QueueProbe(Guid itemId)
+        => _providerManager.QueueRefresh(itemId, new MetadataRefreshOptions(new DirectoryService(_fileSystem)), RefreshPriority.Normal);
 }

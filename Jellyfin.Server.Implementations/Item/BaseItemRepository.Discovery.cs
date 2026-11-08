@@ -21,7 +21,8 @@ public sealed partial class BaseItemRepository
     /// Leaves out everything in the discovery folder (TopParentId is the folder) and the extras owned by such items,
     /// unless <see cref="InternalItemsQuery.IncludeDiscovery"/> is set. A query for explicit
     /// <see cref="InternalItemsQuery.ItemIds"/> is not guarded: clients refetch items they already hold by id (the TV
-    /// player, the trailer queue).
+    /// player, the trailer queue). Nor is a query for the extras of explicit <see cref="InternalItemsQuery.OwnerIds"/>:
+    /// the caller already holds the owner, so a discovery film's detail page gets its local trailers.
     /// </summary>
     /// <param name="context">The database context.</param>
     /// <param name="baseQuery">The query to filter.</param>
@@ -32,7 +33,7 @@ public sealed partial class BaseItemRepository
         IQueryable<BaseItemEntity> baseQuery,
         InternalItemsQuery filter)
     {
-        if (filter.IncludeDiscovery || filter.ItemIds.Length > 0)
+        if (filter.IncludeDiscovery || filter.ItemIds.Length > 0 || filter.OwnerIds.Length > 0)
         {
             return baseQuery;
         }
