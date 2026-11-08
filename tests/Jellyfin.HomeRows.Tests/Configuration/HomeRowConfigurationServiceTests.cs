@@ -579,6 +579,25 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Expand_ParentWithCustomTitle_DerivedRowsHaveNoTitle()
+    {
+        var service = CreateService();
+        var parent = Row(Expanding) with { Title = "My title" };
+        var plain = Row(HomeRowProviderIds.NextUp) with { Title = "Keep me" };
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent, plain], Ct));
+        _expanding.Lists = 2;
+
+        var layout = await service.GetEffectiveLayoutAsync(_user, Ct);
+        var expanded = await service.ExpandAsync(_user, layout, Ct);
+
+        Assert.Equal("My title", layout.Rows[0].Row.Title);
+        Assert.Equal(3, expanded.Rows.Count);
+        Assert.Null(expanded.Rows[0].Row.Title);
+        Assert.Null(expanded.Rows[1].Row.Title);
+        Assert.Equal("Keep me", expanded.Rows[2].Row.Title);
+    }
+
+    [Fact]
     public void DerivedRowId_IsMd5OfParentBytesAndIndex()
     {
         var parent = Guid.Parse("0f8fad5b-d9cb-469f-a165-70867728950e");
