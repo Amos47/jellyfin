@@ -36,6 +36,8 @@
 
   <ItemGroup>
     <EmbeddedResource Include="TestPage.html" />
+    <!-- Fork: discovery, the classified item endpoints the contract tripwire compares the API with -->
+    <EmbeddedResource Include="Discovery\item-endpoints.txt" LogicalName="DiscoveryItemEndpoints.txt" />
   </ItemGroup>
 
 </Project>
