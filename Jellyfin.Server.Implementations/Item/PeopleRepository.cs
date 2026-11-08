@@ -422,6 +422,13 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
             query = query.Where(e => context.PeopleBaseItemMap
                 .Any(m => m.PeopleId == e.Id && accessibleItems.Any(i => i.Id == m.ItemId)));
         }
+        else
+        {
+            // Fork: discovery - leave out people credited only on discovery items; uncredited people stay listed
+            var visibleItems = queryHelpers.ApplyDiscoveryGuard(context, context.BaseItems.AsNoTracking());
+            query = query.Where(e => !context.PeopleBaseItemMap.Any(m => m.PeopleId == e.Id)
+                || context.PeopleBaseItemMap.Any(m => m.PeopleId == e.Id && visibleItems.Any(i => i.Id == m.ItemId)));
+        }
 
         if (filter.MustHaveItem)
         {

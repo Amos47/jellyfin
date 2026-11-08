@@ -225,6 +225,36 @@ public sealed class DiscoveryContractTests : IClassFixture<JellyfinApplicationFa
     }
 
     [Fact]
+    public async Task Persons_SharedCast_Listed()
+    {
+        // Only people credited on nothing but discovery films are left out: one also credited on a real film stays.
+        var (contract, client) = await SetUpAsync();
+        using var keyClient = CreateApiKeyClient(contract);
+        try
+        {
+            await LibraryManager.UpdatePeopleAsync(
+                contract.RealFilm,
+                [new PersonInfo { Name = RealPerson, Type = PersonKind.Actor }, new PersonInfo { Name = DiscoveryPerson, Type = PersonKind.Actor }],
+                Ct);
+
+            var persons = await GetAsync<QueryResult<BaseItemDto>>(client, $"Persons?userId={contract.UserId:N}");
+            var keyPersons = await GetAsync<QueryResult<BaseItemDto>>(keyClient, "Persons?searchTerm=Actor");
+
+            Assert.Contains(persons.Items, p => p.Name == DiscoveryPerson);
+            Assert.Contains(persons.Items, p => p.Name == RealPerson);
+            Assert.Contains(keyPersons.Items, p => p.Name == DiscoveryPerson);
+        }
+        finally
+        {
+            await LibraryManager.UpdatePeopleAsync(contract.RealFilm, [new PersonInfo { Name = RealPerson, Type = PersonKind.Actor }], Ct);
+        }
+
+        // Back to discovery-only: hidden again.
+        var after = await GetAsync<QueryResult<BaseItemDto>>(client, $"Persons?userId={contract.UserId:N}");
+        Assert.DoesNotContain(after.Items, p => p.Name == DiscoveryPerson);
+    }
+
+    [Fact]
     public async Task Filters_And_Years_Exclude()
     {
         // Not item endpoints (they hand back names and numbers), so the tripwire doesn't list them; they are built from

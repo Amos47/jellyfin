@@ -5,7 +5,6 @@
 # Format: METHOD /path  # class: note. Only the text before '#' is compared.
 # Classes:
 #   hidden      lists library items; discovery films and their trailers are left out (test named)
-#   leak        lists items it should hide; open concern (test named, currently failing)
 #   by-id       the item asked for, or its own ancestors, extras, parts or by-id links; a discovery film resolves by
 #               design (detail pages, trailer queue, player refetch)
 #   by-name     one genre/studio/person/artist/year item by name; its counts use guarded queries
@@ -59,7 +58,7 @@ GET /Movies/{itemId}/Similar  # hidden: Similar_Excludes
 GET /MusicGenres/InstantMix  # not-movies: songs
 GET /MusicGenres/{genreName}  # by-name
 GET /MusicGenres/{name}/InstantMix  # not-movies: songs
-GET /Persons  # leak: lists people only credited on discovery films for unrestricted users and admin API keys (no access filter); hidden for users with parental limits (Genres_Studios_Persons_Exclude)
+GET /Persons  # hidden: people credited only on discovery films are left out, with or without an access filter (Genres_Studios_Persons_Exclude); shared cast stays (Persons_SharedCast_Listed)
 GET /Persons/{name}  # by-name
 GET /Playlists/{itemId}/InstantMix  # not-movies: songs
 GET /Playlists/{playlistId}/Items  # by-id: the playlist's own entries, which a user adds by id

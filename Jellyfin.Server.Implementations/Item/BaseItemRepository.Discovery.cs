@@ -48,6 +48,10 @@ public sealed partial class BaseItemRepository
             && (e.OwnerId == null || !context.BaseItems.Any(o => o.Id == e.OwnerId && o.TopParentId == folderId)));
     }
 
+    /// <inheritdoc />
+    public IQueryable<BaseItemEntity> ApplyDiscoveryGuard(JellyfinDbContext context, IQueryable<BaseItemEntity> baseQuery)
+        => ApplyDiscoveryGuard(context, baseQuery, new InternalItemsQuery());
+
     // Resolved on first use rather than injected so the upstream constructor stays as it is. Empty when the folder
     // is not registered yet (early boot) or there is no locator (unit tests with a mocked host).
     private Guid GetDiscoveryFolderId()
