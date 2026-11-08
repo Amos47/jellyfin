@@ -12,6 +12,7 @@ using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Model.Dto;
+using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
 
@@ -51,7 +52,7 @@ public class MovieDiscoveryProviderTests
         _planner
             .Setup(p => p.GetPickedListsAsync(_user, It.IsAny<int>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .Returns<User, int, DateOnly, CancellationToken>((_, max, _, _) => Task.FromResult<IReadOnlyList<DiscoveryList>>(picked.Take(max).ToArray()));
-        return new MovieDiscoveryProvider(_planner.Object, _store.Object, _adapter.Object);
+        return new MovieDiscoveryProvider(_planner.Object, _store.Object, _adapter.Object, NullLogger<MovieDiscoveryProvider>.Instance);
     }
 
     private void SetRowItems(DiscoveryList list, params DiscoveryRowItem[] items)
@@ -158,6 +159,40 @@ public class MovieDiscoveryProviderTests
         var shown = Assert.Single(_shown);
         Assert.Equal([5, 6], shown.TmdbIds);
         Assert.Equal(_today, shown.Day);
+    }
+
+    [Fact]
+    public async Task Items_RecordingShownFails_StillReturnsRow()
+    {
+        var a = List("a", 5, 6);
+        var provider = CreateProvider(a);
+        var items = new[] { Item(5), Item(6) };
+        SetRowItems(a, items);
+        _store
+            .Setup(s => s.MarkShownAsync(It.IsAny<IEnumerable<int>>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new InvalidOperationException("custom-jelly.db is locked"));
+
+        var result = await provider.GetItemsAsync(Context(), new JsonObject(), new HomeRowPaging(0, 20), Ct);
+
+        Assert.Equal("Title of a", result.Title);
+        Assert.Equal(items.Select(i => i.Item.Id), result.Items.Select(i => i.Id));
+        Assert.Equal(2, result.TotalRecordCount);
+    }
+
+    [Fact]
+    public async Task Items_RecordingShownCancelled_Throws()
+    {
+        var a = List("a", 5);
+        var provider = CreateProvider(a);
+        SetRowItems(a, Item(5));
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        _store
+            .Setup(s => s.MarkShownAsync(It.IsAny<IEnumerable<int>>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new OperationCanceledException(cts.Token));
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(
+            () => provider.GetItemsAsync(Context(), new JsonObject(), new HomeRowPaging(0, 20), cts.Token));
     }
 
     [Fact]

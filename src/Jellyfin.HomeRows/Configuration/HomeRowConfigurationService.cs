@@ -305,7 +305,11 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         parentId.TryWriteBytes(bytes);
         BinaryPrimitives.WriteInt32LittleEndian(bytes[16..], index);
         Span<byte> hash = stackalloc byte[MD5.HashSizeInBytes];
+
+        // Not security related: MD5 only derives a stable row id, like upstream's GetMD5.
+#pragma warning disable CA5351
         MD5.HashData(bytes, hash);
+#pragma warning restore CA5351
         return new Guid(hash);
     }
 

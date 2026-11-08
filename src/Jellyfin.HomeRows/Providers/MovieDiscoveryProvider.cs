@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Jellyfin.HomeRows.Schema;
 using MediaBrowser.Controller.Discovery;
 using MediaBrowser.Controller.Entities;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.HomeRows.Providers;
 
@@ -23,6 +24,7 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
     private readonly IDiscoveryRowPlanner _planner;
     private readonly IDiscoveryStore _store;
     private readonly IHomeRowItemAdapter _adapter;
+    private readonly ILogger<MovieDiscoveryProvider> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MovieDiscoveryProvider"/> class.
@@ -30,11 +32,13 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
     /// <param name="planner">The discovery row planner.</param>
     /// <param name="store">The discovery store, for the shown log.</param>
     /// <param name="adapter">The item adapter.</param>
-    public MovieDiscoveryProvider(IDiscoveryRowPlanner planner, IDiscoveryStore store, IHomeRowItemAdapter adapter)
+    /// <param name="logger">The logger.</param>
+    public MovieDiscoveryProvider(IDiscoveryRowPlanner planner, IDiscoveryStore store, IHomeRowItemAdapter adapter, ILogger<MovieDiscoveryProvider> logger)
     {
         _planner = planner;
         _store = store;
         _adapter = adapter;
+        _logger = logger;
     }
 
     /// <inheritdoc />
@@ -90,7 +94,15 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
         var page = items.Skip(paging.StartIndex).Take(paging.Limit).ToArray();
         if (page.Length > 0)
         {
-            await _store.MarkShownAsync(page.Select(i => i.Film.TmdbId), day, cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await _store.MarkShownAsync(page.Select(i => i.Film.TmdbId), day, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
+            {
+                // The shown log is best effort: failing to write it must not hide the row.
+                _logger.LogWarning(ex, "Recording the shown discovery films of list {ListId} failed", list.Id);
+            }
         }
 
         var dtos = _adapter.ToDtos(page.Select(i => i.Item).ToArray<BaseItem>(), context);

@@ -583,7 +583,10 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     {
         var parent = Guid.Parse("0f8fad5b-d9cb-469f-a165-70867728950e");
         var bytes = parent.ToByteArray().Concat(BitConverter.GetBytes(1)).ToArray();
+        // Not security related: the expected value of the id derivation.
+#pragma warning disable CA5351
         var expected = new Guid(System.Security.Cryptography.MD5.HashData(bytes));
+#pragma warning restore CA5351
 
         Assert.True(BitConverter.IsLittleEndian);
         Assert.Equal(expected, HomeRowConfigurationService.GetDerivedRowId(parent, 1));
