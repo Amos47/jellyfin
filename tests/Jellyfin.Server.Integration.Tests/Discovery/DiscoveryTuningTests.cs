@@ -7,6 +7,7 @@ using System.Net.Http.Json;
 using System.Text.Json.Nodes;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Api.Models.HomeRowDtos;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Extensions.Json;
 using Jellyfin.HomeRows;
@@ -247,6 +248,34 @@ public sealed class DiscoveryTuningTests : IClassFixture<JellyfinApplicationFact
     }
 
     [Fact]
+    public async Task HomeRowItems_RemoteTrailersFollowTheExternalTrailersSetting()
+    {
+        var client = await SetUpAsync();
+        var admin = await GetAdminAsync(client);
+        try
+        {
+            var film = await PutFilmWithRemoteTrailerAsync(client, "ext-row", 1821);
+            var parentId = Guid.NewGuid();
+
+            // Default: the setting is absent, so off.
+            await SaveLayoutAsync(admin, new JsonObject { ["maxRows"] = 1 }, parentId);
+            var rowId = Assert.Single((await GetAsync<HomeRowConfigurationDto>(client, "HomeRows/Configuration?expand=true")).Rows).Id;
+            var hidden = Assert.Single((await GetRowItemsAsync(client, rowId)).Items, i => i.Id.Equals(film.Id));
+            Assert.Empty(hidden.RemoteTrailers);
+
+            await SaveLayoutAsync(admin, new JsonObject { ["maxRows"] = 1, ["externalTrailers"] = true }, parentId);
+            rowId = Assert.Single((await GetAsync<HomeRowConfigurationDto>(client, "HomeRows/Configuration?expand=true")).Rows).Id;
+            var shown = Assert.Single((await GetRowItemsAsync(client, rowId)).Items, i => i.Id.Equals(film.Id));
+            Assert.Equal(YouTubeUrl, Assert.Single(shown.RemoteTrailers).Url);
+        }
+        finally
+        {
+            await DeleteLayoutAsync(admin);
+            await DeleteListsAsync(client, "ext-row");
+        }
+    }
+
+    [Fact]
     public async Task OwnedFilm_KeepsRemoteTrailers()
     {
         var client = await SetUpAsync();
@@ -268,6 +297,11 @@ public sealed class DiscoveryTuningTests : IClassFixture<JellyfinApplicationFact
             await DeleteUsersAsync(user);
         }
     }
+
+    private static Task<HomeRowItemsDto> GetRowItemsAsync(HttpClient client, Guid rowId)
+        => GetAsync<HomeRowItemsDto>(client, $"HomeRows/{rowId:D}/Items?fields=RemoteTrailers");
+
+    private Task DeleteLayoutAsync(User user) => Layouts.ResetUserLayoutAsync(user, Ct);
 
     private static JsonNode Find(JsonArray lists, string id) => Assert.Single(lists, l => (string?)l!["Id"] == id)!;
 
