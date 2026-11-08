@@ -461,6 +461,8 @@ public sealed partial class BaseItemRepository
         IQueryable<BaseItemEntity> baseQuery,
         InternalItemsQuery filter)
     {
+        baseQuery = ApplyDiscoveryGuard(context, baseQuery, filter); // Fork: discovery
+
         baseQuery = ApplyTopParentFiltering(context, baseQuery, filter);
 
         baseQuery = ApplyParentalRestrictions(context, baseQuery, filter);

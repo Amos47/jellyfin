@@ -487,6 +487,12 @@ namespace MediaBrowser.Controller.Entities
         public bool IncludeOwnedItems { get; set; }
 
         /// <summary>
+        /// Gets or sets a value indicating whether to include the hidden virtual films of the movie discovery
+        /// feature (and their extras), which every query leaves out by default.
+        /// </summary>
+        public bool IncludeDiscovery { get; set; } // Fork: discovery
+
+        /// <summary>
         /// Gets or sets a value indicating whether to include alternate versions, which carry a
         /// <see cref="Video.PrimaryVersionId"/> and are normally hidden behind the version they
         /// belong to. Unlike <see cref="IncludeOwnedItems"/> this keeps the versions a user merged
