@@ -598,6 +598,8 @@ namespace Emby.Server.Implementations
             serviceCollection.AddSingleton<IDiscoveryFolderLocator>(sp => sp.GetRequiredService<DiscoveryFolderLocator>());
             serviceCollection.AddSingleton<IRewatchMarkerStore, RewatchMarkerStore>();
             serviceCollection.AddSingleton<IDiscoveryStore, DiscoveryStore>();
+            serviceCollection.AddSingleton<IDiscoveryMetadataRefresher, DiscoveryMetadataRefresher>();
+            serviceCollection.AddSingleton<IDiscoveryFilmSync, DiscoveryFilmSync>();
             serviceCollection.AddSingleton<IRewatchCandidateFinder, RewatchCandidateFinder>();
             serviceCollection.AddSingleton<ITVSeriesManager, TVSeriesManager>();
 

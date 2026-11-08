@@ -20,7 +20,7 @@ namespace Jellyfin.Server.Integration.Tests.Discovery;
 /// Seeds a test host once: completes the startup wizard, then adds one virtual discovery film ("Seed Film", with a
 /// trailer extra) under the discovery folder and one real film in a temporary movie library. Reused by later
 /// discovery tests: call <see cref="EnsureAsync"/> before anything else and authenticate with
-/// <see cref="Seeded.AccessToken"/> (the wizard can only be completed once per host).
+/// <see cref="DiscoverySeeded.AccessToken"/> (the wizard can only be completed once per host).
 /// </summary>
 public static class DiscoverySeed
 {
@@ -35,17 +35,17 @@ public static class DiscoverySeed
 
     private const string LibraryName = "discovery-seed-movies";
 
-    private static readonly ConditionalWeakTable<JellyfinApplicationFactory, Task<Seeded>> _seeds = new();
+    private static readonly ConditionalWeakTable<JellyfinApplicationFactory, Task<DiscoverySeeded>> _seeds = new();
 
     /// <summary>
     /// Seeds the host behind <paramref name="factory"/> once and returns what was created.
     /// </summary>
     /// <param name="factory">The test host.</param>
     /// <returns>The seeded items.</returns>
-    public static Task<Seeded> EnsureAsync(JellyfinApplicationFactory factory)
+    public static Task<DiscoverySeeded> EnsureAsync(JellyfinApplicationFactory factory)
         => _seeds.GetValue(factory, SeedAsync);
 
-    private static async Task<Seeded> SeedAsync(JellyfinApplicationFactory factory)
+    private static async Task<DiscoverySeeded> SeedAsync(JellyfinApplicationFactory factory)
     {
         var client = factory.CreateClient();
 
@@ -106,7 +106,7 @@ public static class DiscoverySeed
         seedTrailer.Id = libraryManager.GetNewItemId(seedTrailer.Path, typeof(Trailer));
         libraryManager.CreateItem(seedTrailer, null);
 
-        return new Seeded(accessToken, locator.FolderId, seedFilm, seedTrailer, realFilm, library);
+        return new DiscoverySeeded(accessToken, locator.FolderId, seedFilm, seedTrailer, realFilm, library);
     }
 
     private static async Task WaitForScanAsync(IScheduledTaskWorker scan, DateTime? scannedBefore)
@@ -134,15 +134,4 @@ public static class DiscoverySeed
 
         throw new TimeoutException("The library scan queued by the startup wizard did not finish.");
     }
-
-    /// <summary>
-    /// What <see cref="EnsureAsync"/> created.
-    /// </summary>
-    /// <param name="AccessToken">An admin access token (the wizard's user).</param>
-    /// <param name="FolderId">The discovery folder id.</param>
-    /// <param name="SeedFilm">The virtual discovery film.</param>
-    /// <param name="SeedTrailer">A trailer extra owned by the virtual film.</param>
-    /// <param name="RealFilm">The real library film.</param>
-    /// <param name="Library">The temporary movie library.</param>
-    public sealed record Seeded(string AccessToken, Guid FolderId, Movie SeedFilm, Trailer SeedTrailer, Movie RealFilm, CollectionFolder Library);
 }

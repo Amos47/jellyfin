@@ -33,7 +33,11 @@ public sealed class DiscoveryStoreTests : IAsyncLifetime, IDisposable
 
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
-    public void Dispose() => _connection.Dispose();
+    public void Dispose()
+    {
+        _store?.Dispose();
+        _connection.Dispose();
+    }
 
     [Fact]
     public async Task SetList_ThenGet_RoundTripsOrder()
