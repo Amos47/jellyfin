@@ -241,23 +241,13 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         // A derived id of an expanded row (it carries the parent's prefix): the parent row, with the key of the sub-row
         // it names. Every key the provider can still serve matches, not only today's, so a client holding an older layout
         // gets the same content. A key it can no longer serve (a deleted list) gets HomeSubRow.UnknownKey: an empty row.
+        // A provider that fails here throws (the request answers 500): an empty row would look like a deleted list.
         var context = new HomeRowContext(user, new DtoOptions(), DateTime.UtcNow);
         foreach (var parent in layout.Rows.Where(r => IsExpanding(r) && HasDerivedRowPrefix(r.Row.Id, rowId)))
         {
-            try
-            {
-                var keys = await GetResolvableSubRowKeysAsync(context, parent.Row, ct).ConfigureAwait(false);
-                if (keys.FirstOrDefault(k => GetDerivedRowId(parent.Row.Id, k).Equals(rowId)) is { } key)
-                {
-                    return parent with { SubRowKey = key };
-                }
-            }
-            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
-            {
-                _logger.LogError(ex, "Resolving the expanded rows of home row {RowId} of provider {ProviderId} failed", parent.Row.Id, parent.Row.Provider);
-            }
-
-            return parent with { SubRowKey = HomeSubRow.UnknownKey };
+            var keys = await GetResolvableSubRowKeysAsync(context, parent.Row, ct).ConfigureAwait(false);
+            var key = keys.FirstOrDefault(k => !string.IsNullOrEmpty(k) && GetDerivedRowId(parent.Row.Id, k).Equals(rowId));
+            return parent with { SubRowKey = key ?? HomeSubRow.UnknownKey };
         }
 
         return null;
@@ -294,7 +284,8 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
                 subRows = [];
             }
 
-            foreach (var subRow in subRows.DistinctBy(r => r.Key, StringComparer.Ordinal).Take(MaxExpandedRows))
+            // An empty key is HomeSubRow.UnknownKey, never a real sub-row.
+            foreach (var subRow in subRows.Where(r => !string.IsNullOrEmpty(r.Key)).DistinctBy(r => r.Key, StringComparer.Ordinal).Take(MaxExpandedRows))
             {
                 // Title = null: each derived row is named by its own list title from /Items, not the parent's custom title.
                 rows.Add(row with { Row = row.Row with { Id = GetDerivedRowId(row.Row.Id, subRow.Key), Title = null }, SubRowKey = subRow.Key });
@@ -324,6 +315,26 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         HashWithParent(parentId, key, id);
         HashWithParent(parentId, DerivedRowPrefixText, stackalloc byte[16])[..DerivedRowPrefixLength].CopyTo(id);
         return new Guid(id);
+    }
+
+    /// <summary>
+    /// Gets a new row id that carries no expanding row's derived-row prefix, so a saved row is never taken for an expanded one.
+    /// </summary>
+    /// <param name="expandingIds">The ids of the expanding rows.</param>
+    /// <param name="next">Draws a candidate id.</param>
+    /// <returns>The new row id.</returns>
+    public static Guid NewRowId(IEnumerable<Guid> expandingIds, Func<Guid> next)
+    {
+        ArgumentNullException.ThrowIfNull(next);
+        var parents = expandingIds.ToList();
+        Guid id;
+        do
+        {
+            id = next();
+        }
+        while (parents.Any(parentId => HasDerivedRowPrefix(parentId, id)));
+
+        return id;
     }
 
     /// <summary>
@@ -459,7 +470,7 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
-            var id = row.Id.IsEmpty() ? Guid.NewGuid() : row.Id;
+            var id = row.Id.IsEmpty() ? NewRowId(expandingIds, Guid.NewGuid) : row.Id;
             if (!ids.Add(id))
             {
                 errors.Add(new HomeRowSaveError(i, "id", "The row id is used by another row."));

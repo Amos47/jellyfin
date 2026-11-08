@@ -759,18 +759,43 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task FindRow_ResolvableKeysFail_DerivedIdIsUnknownKey_ParentStillFound()
+    public async Task FindRow_ResolvableKeysFail_DerivedIdThrows_ParentStillFound()
     {
+        // A failing provider is an error (500), not a silently empty row that looks like a deleted list.
         var service = CreateService();
         var parent = Row(Expanding);
         Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
         _expanding.Keys = ["a"];
         _expanding.FailResolvable = true;
 
-        var found = await service.FindRowAsync(_user, HomeRowConfigurationService.GetDerivedRowId(parent.Id, "a"), Ct);
-        Assert.NotNull(found);
-        Assert.Equal(HomeSubRow.UnknownKey, found.SubRowKey);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => service.FindRowAsync(_user, HomeRowConfigurationService.GetDerivedRowId(parent.Id, "a"), Ct));
         Assert.NotNull(await service.FindRowAsync(_user, parent.Id, Ct));
+    }
+
+    [Fact]
+    public async Task Expand_SkipsEmptySubRowKeys()
+    {
+        // "" is HomeSubRow.UnknownKey, never a real key.
+        var service = CreateService();
+        var parent = Row(Expanding);
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
+        _expanding.Keys = [string.Empty, "a"];
+
+        var expanded = await service.ExpandAsync(_user, await service.GetEffectiveLayoutAsync(_user, Ct), Ct);
+
+        Assert.Equal(new[] { "a" }, expanded.Rows.Where(r => r.Row.Provider == Expanding).Select(r => r.SubRowKey));
+    }
+
+    [Fact]
+    public void NewRowId_RedrawsAnIdThatCarriesAnExpandingRowsPrefix()
+    {
+        var parent = Guid.NewGuid();
+        var clash = HomeRowConfigurationService.GetDerivedRowId(parent, "x");
+        var fine = Guid.NewGuid();
+        var draws = new Queue<Guid>([clash, fine]);
+
+        Assert.Equal(fine, HomeRowConfigurationService.NewRowId([parent], draws.Dequeue));
+        Assert.Empty(draws);
     }
 
     [Fact]
