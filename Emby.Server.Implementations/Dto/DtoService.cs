@@ -37,7 +37,7 @@ using Series = MediaBrowser.Controller.Entities.TV.Series;
 
 namespace Emby.Server.Implementations.Dto
 {
-    public class DtoService : IDtoService
+    public partial class DtoService : IDtoService // Fork: partial, for DtoService.Discovery.cs
     {
         private static readonly FrozenDictionary<BaseItemKind, BaseItemKind[]> _relatedItemKinds = new Dictionary<BaseItemKind, BaseItemKind[]>
         {
@@ -269,6 +269,7 @@ namespace Emby.Server.Implementations.Dto
                 }
             }
 
+            bool? externalTrailers = null; // Fork: discovery, the user's setting, looked up once per call
             for (int index = 0; index < accessibleItems.Count; index++)
             {
                 var item = accessibleItems[index];
@@ -285,6 +286,7 @@ namespace Emby.Server.Implementations.Dto
                     resumeDataBatch?.GetValueOrDefault(item.Id),
                     peopleBatch,
                     alternateVersionItemIds);
+                HideDiscoveryRemoteTrailers(item, dto, user, ref externalTrailers); // Fork: discovery
 
                 if (item is LiveTvChannel tvChannel)
                 {
@@ -319,6 +321,8 @@ namespace Emby.Server.Implementations.Dto
         public BaseItemDto GetBaseItemDto(BaseItem item, DtoOptions options, User? user = null, BaseItem? owner = null)
         {
             var dto = GetBaseItemDtoInternal(item, options, user, owner, null);
+            bool? externalTrailers = null; // Fork: discovery
+            HideDiscoveryRemoteTrailers(item, dto, user, ref externalTrailers); // Fork: discovery
             if (item is LiveTvChannel tvChannel)
             {
                 LivetvManager.AddChannelInfo(new[] { (dto, tvChannel) }, options, user);

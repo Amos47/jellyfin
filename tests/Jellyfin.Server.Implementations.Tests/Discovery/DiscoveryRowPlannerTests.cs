@@ -75,6 +75,38 @@ public class DiscoveryRowPlannerTests
     }
 
     [Fact]
+    public async Task PickedLists_UseTheDaysStoredSalt()
+    {
+        Film(1);
+        var lists = new[] { List("a", 1), List("b", 1), List("c", 1), List("d", 1), List("e", 1) };
+        SetLists(lists);
+        _store.Setup(s => s.GetPickSaltAsync(_day, It.IsAny<CancellationToken>())).ReturnsAsync("salt-x");
+
+        var picked = await _planner.GetPickedListsAsync(_user, 3, _day, Ct);
+
+        Assert.Equal(DiscoveryPicker.Pick(_user.Id, _day, lists, 3, "salt-x").Select(l => l.Id), picked.Select(l => l.Id));
+        _store.Verify(s => s.GetPickSaltAsync(_day, It.IsAny<CancellationToken>()));
+    }
+
+    [Fact]
+    public async Task PickedLists_OneListPerGroup_IneligibleListLeavesGroupOpen()
+    {
+        Film(1);
+        Film(2, visible: false);
+        SetLists(
+            new DiscoveryList("hidden-horror", "Hidden", "tests", [new DiscoveryFilmRef(2, null)], "horror"),
+            new DiscoveryList("horror-1", "H1", "tests", [new DiscoveryFilmRef(1, null)], "horror"),
+            new DiscoveryList("horror-2", "H2", "tests", [new DiscoveryFilmRef(1, null)], "horror"),
+            new DiscoveryList("drama-1", "D1", "tests", [new DiscoveryFilmRef(1, null)], "drama"));
+
+        var picked = await _planner.GetPickedListsAsync(_user, 5, _day, Ct);
+
+        Assert.Equal(2, picked.Count);
+        Assert.Equal(new[] { "drama", "horror" }, picked.Select(l => l.Group!).Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(picked, l => l.Id == "hidden-horror");
+    }
+
+    [Fact]
     public void RowItems_ListOrder_OwnedReplacesVirtual_HiddenLeftOut()
     {
         var first = Film(10);

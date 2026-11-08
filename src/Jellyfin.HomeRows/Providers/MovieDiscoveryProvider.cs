@@ -17,6 +17,7 @@ namespace Jellyfin.HomeRows.Providers;
 public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
 {
     private const string MaxRowsKey = "maxRows";
+    private const string ExternalTrailersKey = "externalTrailers";
     private const int DefaultMaxRows = 3;
     private const int MaxMaxRows = 10;
     private const string DefaultCardStyle = "poster";
@@ -59,6 +60,11 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
                 Default = JsonValue.Create(DefaultMaxRows),
                 Minimum = 1,
                 Maximum = MaxMaxRows
+            },
+            new HomeRowSetting(ExternalTrailersKey, HomeRowSettingType.Boolean, "External trailers")
+            {
+                Description = "Show online trailers (such as YouTube) on films you don't own. Off shows only downloaded trailers.",
+                Default = JsonValue.Create(false)
             },
             CardStyleSetting.Create(DefaultCardStyle)
         ]));
@@ -118,6 +124,14 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
         => config[MaxRowsKey] is JsonValue v && v.TryGetValue<int>(out var max)
             ? Math.Clamp(max, 1, MaxMaxRows)
             : DefaultMaxRows;
+
+    /// <summary>
+    /// Gets the <c>externalTrailers</c> setting of a Movie discovery row's config: false unless it is the boolean true.
+    /// </summary>
+    /// <param name="config">The row config.</param>
+    /// <returns>Whether discovery films show their external trailers.</returns>
+    internal static bool GetExternalTrailers(JsonObject config)
+        => config[ExternalTrailersKey] is JsonValue v && v.TryGetValue<bool>(out var on) && on;
 
     // The pick changes at the server's local midnight.
     private static DateOnly GetDay(HomeRowContext context)

@@ -51,6 +51,7 @@ public static class HomeRowsServiceCollectionExtensions
         services.AddSingleton<IHomeRowProvider, GenreProvider>();
         services.AddSingleton<IHomeRowProvider, MovieDiscoveryProvider>();
         services.AddSingleton<IDiscoveryUserPicks, MovieDiscoveryPicks>();
+        services.AddSingleton<IDiscoveryUserSettings, MovieDiscoverySettings>();
 
         // Later tasks add one line per IHomeRowProvider here.
         return services;

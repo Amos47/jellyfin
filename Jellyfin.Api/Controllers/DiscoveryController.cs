@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
@@ -13,6 +14,7 @@ using MediaBrowser.Model.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.ModelBinding;
 using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Api.Controllers;
@@ -25,6 +27,8 @@ namespace Jellyfin.Api.Controllers;
 [Tags("Discovery")]
 public partial class DiscoveryController : BaseJellyfinApiController
 {
+    private const int MaxGroupLength = 100;
+
     private static readonly ExtraType[] _trailerTypes = [ExtraType.Trailer];
 
     private readonly IDiscoveryStore _store;
@@ -98,6 +102,26 @@ public partial class DiscoveryController : BaseJellyfinApiController
     }
 
     /// <summary>
+    /// Re-picks a day: stores a new random salt for it, so every user's Movie discovery rows (and the picks API) pick
+    /// lists afresh for that day. The new picks hold until the next re-pick or the next day.
+    /// </summary>
+    /// <param name="request">Optional: the day to re-pick. The body may be empty.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="200">Day re-picked.</response>
+    /// <returns>The day and its new salt.</returns>
+    [HttpPost("Picks/Reshuffle")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult<DiscoveryReshuffleDto>> ReshufflePicks(
+        [FromBody(EmptyBodyBehavior = EmptyBodyBehavior.Allow)] DiscoveryReshuffleRequestDto? request,
+        CancellationToken cancellationToken)
+    {
+        var day = request?.Date ?? DateOnly.FromDateTime(DateTime.Now);
+        var salt = RandomNumberGenerator.GetHexString(32, lowercase: true);
+        await _store.SetPickSaltAsync(day, salt, cancellationToken).ConfigureAwait(false);
+        return Ok(new DiscoveryReshuffleDto(day, salt));
+    }
+
+    /// <summary>
     /// Gets the discovery films: every film of every list, each once, with whether it has a trailer and when it was
     /// shown.
     /// </summary>
@@ -155,7 +179,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
     /// <param name="list">The list.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <response code="204">List saved.</response>
-    /// <response code="400">The id or the list is invalid.</response>
+    /// <response code="400">The id or the list is invalid (including a group over 100 characters).</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPut("Lists/{listId}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
@@ -185,6 +209,12 @@ public partial class DiscoveryController : BaseJellyfinApiController
             return BadRequest("The films are required.");
         }
 
+        var group = string.IsNullOrWhiteSpace(list.Group) ? null : list.Group.Trim();
+        if (group?.Length > MaxGroupLength)
+        {
+            return BadRequest($"The group must be at most {MaxGroupLength} characters.");
+        }
+
         var films = new List<DiscoveryFilmRef>(list.Films.Count);
         var seen = new HashSet<int>();
         foreach (var film in list.Films)
@@ -200,7 +230,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
             }
         }
 
-        await _store.SetListAsync(new DiscoveryList(listId, list.Title, list.Source, films), cancellationToken).ConfigureAwait(false);
+        await _store.SetListAsync(new DiscoveryList(listId, list.Title, list.Source, films, group), cancellationToken).ConfigureAwait(false);
 
         // Not the request's token: once the list is saved, the films follow it even if the client hangs up.
         await _filmSync.SyncAsync(CancellationToken.None).ConfigureAwait(false);
@@ -286,7 +316,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
     private static bool IsValidId(string id) => ListIdRegex().IsMatch(id);
 
     private static DiscoveryListDto ToDto(DiscoveryList list)
-        => new(list.Id, list.Title, list.Source, list.Films.Select(f => new DiscoveryFilmDto(f.TmdbId, f.ImdbId)).ToArray());
+        => new(list.Id, list.Title, list.Source, list.Films.Select(f => new DiscoveryFilmDto(f.TmdbId, f.ImdbId)).ToArray(), list.Group);
 
     // \z rather than $, which would also let a trailing newline through.
     [GeneratedRegex(@"^[a-z0-9-]{1,64}\z")]

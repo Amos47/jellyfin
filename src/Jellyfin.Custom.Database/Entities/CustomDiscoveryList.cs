@@ -28,6 +28,11 @@ public class CustomDiscoveryList
     public required string FilmsJson { get; set; }
 
     /// <summary>
+    /// Gets or sets the group of the list, at most 100 characters, or null for none.
+    /// </summary>
+    public string? Group { get; set; }
+
+    /// <summary>
     /// Gets or sets the date the list was last modified.
     /// </summary>
     public DateTime DateModified { get; set; }

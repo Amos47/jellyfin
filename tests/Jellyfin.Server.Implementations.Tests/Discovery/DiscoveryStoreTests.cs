@@ -57,6 +57,56 @@ public sealed class DiscoveryStoreTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task Lists_RoundTripGroup()
+    {
+        var ct = TestContext.Current.CancellationToken;
+
+        await _store.SetListAsync(new DiscoveryList("grouped", "Grouped", "test", [new(1, null)], "genre:horror"), ct);
+        await _store.SetListAsync(new DiscoveryList("plain", "Plain", "test", [new(2, null)]), ct);
+
+        Assert.Equal("genre:horror", (await _store.GetListAsync("grouped", ct))!.Group);
+        Assert.Null((await _store.GetListAsync("plain", ct))!.Group);
+        Assert.Equal(new string?[] { "genre:horror", null }, (await _store.GetListsAsync(ct)).Select(l => l.Group));
+
+        // Replacing a list replaces its group too, including clearing it.
+        await _store.SetListAsync(new DiscoveryList("grouped", "Grouped", "test", [new(1, null)]), ct);
+        Assert.Null((await _store.GetListAsync("grouped", ct))!.Group);
+    }
+
+    [Fact]
+    public async Task PickSalt_NoneByDefault_SetReplaces_PerDay()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var day = DateOnly.FromDateTime(DateTime.Now);
+
+        Assert.Null(await _store.GetPickSaltAsync(day, ct));
+
+        await _store.SetPickSaltAsync(day, "first", ct);
+        await _store.SetPickSaltAsync(day.AddDays(1), "tomorrow", ct);
+        await _store.SetPickSaltAsync(day, "second", ct);
+
+        Assert.Equal("second", await _store.GetPickSaltAsync(day, ct));
+        Assert.Equal("tomorrow", await _store.GetPickSaltAsync(day.AddDays(1), ct));
+        Assert.Null(await _store.GetPickSaltAsync(day.AddDays(2), ct));
+    }
+
+    [Fact]
+    public async Task PickSalt_OldSaltsPruned()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var old = today.AddDays(-60);
+
+        await _store.SetPickSaltAsync(old, "old", ct);
+        Assert.Equal("old", await _store.GetPickSaltAsync(old, ct));
+
+        await _store.SetPickSaltAsync(today, "new", ct);
+
+        Assert.Null(await _store.GetPickSaltAsync(old, ct));
+        Assert.Equal("new", await _store.GetPickSaltAsync(today, ct));
+    }
+
+    [Fact]
     public async Task SetList_SameId_Replaces()
     {
         var ct = TestContext.Current.CancellationToken;

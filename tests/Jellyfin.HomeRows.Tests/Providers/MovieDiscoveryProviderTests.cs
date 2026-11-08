@@ -73,13 +73,32 @@ public class MovieDiscoveryProviderTests
 
         Assert.Equal(HomeRowProviderIds.MovieDiscovery, provider.Id);
         Assert.IsAssignableFrom<IExpandingHomeRowProvider>(provider);
-        Assert.Equal(["maxRows", "cardStyle"], schema.Settings.Select(s => s.Key));
+        Assert.Equal(["maxRows", "externalTrailers", "cardStyle"], schema.Settings.Select(s => s.Key));
         var maxRows = schema.Settings[0];
         Assert.Equal(HomeRowSettingType.Integer, maxRows.Type);
         Assert.Equal(1, maxRows.Minimum);
         Assert.Equal(10, maxRows.Maximum);
         Assert.Equal(3, maxRows.Default!.GetValue<int>());
-        Assert.Equal("poster", schema.Settings[1].Default!.GetValue<string>());
+        var externalTrailers = schema.Settings[1];
+        Assert.Equal(HomeRowSettingType.Boolean, externalTrailers.Type);
+        Assert.False(externalTrailers.Default!.GetValue<bool>());
+        Assert.Equal("poster", schema.Settings[2].Default!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task ConfigValidation_RejectsNonBoolExternalTrailers()
+    {
+        var schema = await CreateProvider().GetSchemaAsync(Context(), Ct);
+
+        var bad = HomeRowConfigValidator.Validate(schema, new JsonObject { ["externalTrailers"] = "yes" });
+        var good = HomeRowConfigValidator.Validate(schema, new JsonObject { ["externalTrailers"] = true });
+        var missing = HomeRowConfigValidator.Validate(schema, new JsonObject());
+
+        Assert.Single(bad.Errors, e => e.Key == "externalTrailers");
+        Assert.Empty(good.Errors);
+        Assert.True(good.Config["externalTrailers"]!.GetValue<bool>());
+        Assert.Empty(missing.Errors);
+        Assert.False(missing.Config["externalTrailers"]!.GetValue<bool>());
     }
 
     [Fact]

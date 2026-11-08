@@ -284,7 +284,8 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
 
             for (var i = 0; i < count; i++)
             {
-                rows.Add(row with { Row = row.Row with { Id = GetDerivedRowId(row.Row.Id, i) }, SubRow = i });
+                // Title = null: each derived row is named by its own list title from /Items, not the parent's custom title.
+                rows.Add(row with { Row = row.Row with { Id = GetDerivedRowId(row.Row.Id, i), Title = null }, SubRow = i });
             }
         }
 
