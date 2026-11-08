@@ -27,6 +27,13 @@ public interface IDiscoveryFilmSync
     Movie? FindFilm(int tmdbId);
 
     /// <summary>
+    /// Gets the virtual discovery film with a matching IMDb id.
+    /// </summary>
+    /// <param name="imdbId">The IMDb id.</param>
+    /// <returns>The film, or null if there is none.</returns>
+    Movie? FindFilmByImdb(string imdbId);
+
+    /// <summary>
     /// Gets the film in the user's library with a matching TMDB or IMDb id.
     /// </summary>
     /// <param name="user">The user.</param>

@@ -290,6 +290,41 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
     }
 
     [Fact]
+    public async Task Actions_OwnedFilmWithOnlyImdbId_UsesDiscoveryCopyTrailer()
+    {
+        var client = await SetUpAsync();
+        var admin = await GetAdminAsync(client);
+        await Layouts.ResetUserLayoutAsync(admin, Ct);
+        // The owned film has no TMDB id, only an IMDb id; its discovery copy has both.
+        var owned = await SetOwnedImdbAsync("tt9001176");
+        try
+        {
+            using (var put = await client.PutAsJsonAsync(
+                "Discovery/Lists/ow-imdb",
+                new { Title = "ow-imdb", Source = "tests", Films = new[] { new { TmdbId = 1176, ImdbId = "tt9001176" } } },
+                JsonDefaults.Options,
+                Ct))
+            {
+                Assert.Equal(HttpStatusCode.NoContent, put.StatusCode);
+            }
+
+            var copyTrailer = await SetTrailerAsync(client, 1176, "owned-imdb-1176");
+
+            var actions = await GetAsync<JsonArray>(client, $"Items/{owned.Id:N}/Actions");
+            var queue = await GetQueueAsync(client, owned.Id);
+
+            var action = Assert.Single(actions)!;
+            Assert.Equal("watch-trailer", (string?)action["Id"]);
+            Assert.Equal(new[] { copyTrailer }, queue);
+        }
+        finally
+        {
+            await DeleteListsAsync(client, "ow-imdb");
+            await SetOwnedImdbAsync(null);
+        }
+    }
+
+    [Fact]
     public async Task Actions_OwnedFilmWithOwnTrailer_PrefersOwn()
     {
         var client = await SetUpAsync();
@@ -426,6 +461,25 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
         else
         {
             film.ProviderIds.Remove(MetadataProvider.Tmdb.ToString());
+        }
+
+        await film.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, CancellationToken.None);
+        return film;
+    }
+
+    // The seeded library film, given (or cleared of) an IMDb id, with no TMDB id.
+    private async Task<BaseItem> SetOwnedImdbAsync(string? imdbId)
+    {
+        var seed = await DiscoverySeed.EnsureAsync(_factory);
+        var film = LibraryManager.GetItemById(seed.RealFilm.Id)!;
+        film.ProviderIds.Remove(MetadataProvider.Tmdb.ToString());
+        if (imdbId is not null)
+        {
+            film.SetProviderId(MetadataProvider.Imdb, imdbId);
+        }
+        else
+        {
+            film.ProviderIds.Remove(MetadataProvider.Imdb.ToString());
         }
 
         await film.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, CancellationToken.None);

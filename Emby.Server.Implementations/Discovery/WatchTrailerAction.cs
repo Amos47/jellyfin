@@ -16,8 +16,9 @@ namespace Emby.Server.Implementations.Discovery;
 /// <summary>
 /// Fork: the built-in Watch trailer action, on any film with a local trailer. When the film is in a list the user's
 /// home screen picks today, the queue goes on with the trailers of the films after it in that list. An owned film
-/// without a trailer of its own uses the trailers of its hidden discovery copy (same TMDB id), so a list's owned films
-/// play a trailer too. Only the action does this: the upstream LocalTrailerCount and LocalTrailers stay the film's own.
+/// without a trailer of its own uses the trailers of its hidden discovery copy (same TMDB id, or the same IMDb id when
+/// the film has no TMDB id), so a list's owned films play a trailer too. Only the action does this: the upstream
+/// LocalTrailerCount and LocalTrailers stay the film's own.
 /// </summary>
 public sealed class WatchTrailerAction : IItemActionProvider
 {
@@ -114,9 +115,11 @@ public sealed class WatchTrailerAction : IItemActionProvider
             tmdbId = parsed;
         }
 
-        if (tmdbId is not { } id
-            || _filmSync.FindFilm(id) is not { } copy
-            || copy.Id.Equals(item.Id))
+        // No usable TMDB id: the IMDb id still finds the copy (lists may name a film by both).
+        Movie? copy = tmdbId is { } id
+            ? _filmSync.FindFilm(id)
+            : item.GetProviderId(MetadataProvider.Imdb) is { Length: > 0 } imdbId ? _filmSync.FindFilmByImdb(imdbId) : null;
+        if (copy is null || copy.Id.Equals(item.Id))
         {
             return own;
         }
