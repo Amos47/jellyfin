@@ -25,6 +25,16 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
     /// </summary>
     public DbSet<CustomHomeRowDefault> HomeRowDefaults => Set<CustomHomeRowDefault>();
 
+    /// <summary>
+    /// Gets the discovery lists.
+    /// </summary>
+    public DbSet<CustomDiscoveryList> DiscoveryLists => Set<CustomDiscoveryList>();
+
+    /// <summary>
+    /// Gets the log of discovery films shown.
+    /// </summary>
+    public DbSet<CustomDiscoveryShown> DiscoveryShown => Set<CustomDiscoveryShown>();
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -42,6 +52,20 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
             entity.ToTable("CustomHomeRowDefaults");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).ValueGeneratedNever();
+        });
+
+        modelBuilder.Entity<CustomDiscoveryList>(entity =>
+        {
+            entity.ToTable("CustomDiscoveryLists");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasMaxLength(64).ValueGeneratedNever();
+        });
+
+        modelBuilder.Entity<CustomDiscoveryShown>(entity =>
+        {
+            entity.ToTable("CustomDiscoveryShown");
+            entity.HasKey(e => e.TmdbId);
+            entity.Property(e => e.TmdbId).ValueGeneratedNever();
         });
     }
 }
