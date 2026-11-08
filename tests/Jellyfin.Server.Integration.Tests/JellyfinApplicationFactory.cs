@@ -8,7 +8,7 @@ using Jellyfin.Server.Helpers;
 using Jellyfin.Server.ServerSetupApp;
 using MediaBrowser.Common;
 using MediaBrowser.Common.Configuration;
-using MediaBrowser.Controller.Discovery;
+using MediaBrowser.Controller.Discovery; // Fork: discovery
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -155,13 +155,14 @@ namespace Jellyfin.Server.Integration.Tests
             base.Dispose(disposing);
         }
 
-        private sealed class NoOpDiscoveryMetadataRefresher : IDiscoveryMetadataRefresher
+        // Fork: discovery - the test host's metadata refresher does nothing (no TMDB calls in tests)
+        private sealed class NoOpDiscoveryMetadataRefresher : IDiscoveryMetadataRefresher // Fork: discovery
         {
-            public void QueueRefresh(Guid itemId)
+            public void QueueRefresh(Guid itemId) // Fork: discovery
             {
             }
 
-            public void QueueProbe(Guid itemId)
+            public void QueueProbe(Guid itemId) // Fork: discovery
             {
             }
         }
