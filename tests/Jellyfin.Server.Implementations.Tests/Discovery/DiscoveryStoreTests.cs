@@ -1,5 +1,7 @@
 using System;
+using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Emby.Server.Implementations.Discovery;
 using Jellyfin.Custom.Database;
@@ -93,24 +95,85 @@ public sealed class DiscoveryStoreTests : IAsyncLifetime, IDisposable
     public async Task SetList_ConcurrentSameNewId_DoesNotThrow()
     {
         var ct = TestContext.Current.CancellationToken;
-        await Task.WhenAll(Enumerable.Range(0, 8).Select(i =>
-            _store.SetListAsync(new DiscoveryList("same", "T" + i, "s", [new(i, null)]), ct)));
+        using var db = await ConcurrentDb.CreateAsync(ct);
 
-        Assert.Single(await _store.GetListsAsync(ct));
+        await Task.WhenAll(Enumerable.Range(0, ConcurrentDb.Callers).Select(i =>
+            db.Store.SetListAsync(new DiscoveryList("same", "T" + i, "s", [new(i, null)]), ct)));
+
+        Assert.Single(await db.Store.GetListsAsync(ct));
     }
 
     [Fact]
     public async Task MarkShown_ConcurrentSameNewId_DoesNotThrow()
     {
         var ct = TestContext.Current.CancellationToken;
-        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
-            _store.MarkShownAsync([42, 43], new DateOnly(2026, 11, 7), ct)));
+        using var db = await ConcurrentDb.CreateAsync(ct);
 
-        Assert.Equal(2, (await _store.GetShownAsync(ct)).Count);
+        await Task.WhenAll(Enumerable.Range(0, ConcurrentDb.Callers).Select(_ =>
+            db.Store.MarkShownAsync([42, 43], new DateOnly(2026, 11, 7), ct)));
+
+        Assert.Equal(2, (await db.Store.GetShownAsync(ct)).Count);
     }
 
     private sealed class Factory(DbContextOptions<CustomDbContext> options) : IDbContextFactory<CustomDbContext>
     {
         public CustomDbContext CreateDbContext() => new(options);
+    }
+
+    /// <summary>
+    /// A file backed db with a connection per context, whose factory holds the first callers until they have all
+    /// arrived (or a short timeout passes, which is what an unlocked store never needs), so unserialized check-then-insert
+    /// code interleaves for real.
+    /// </summary>
+    private sealed class ConcurrentDb : IDbContextFactory<CustomDbContext>, IDisposable
+    {
+        public const int Callers = 4;
+
+        private readonly string _path = Path.Combine(Path.GetTempPath(), "discovery-" + Guid.NewGuid().ToString("N") + ".db");
+        private readonly DbContextOptions<CustomDbContext> _options;
+        private readonly TaskCompletionSource _allArrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _arrived;
+
+        private ConcurrentDb()
+        {
+            _options = new DbContextOptionsBuilder<CustomDbContext>()
+                .UseSqlite("Data Source=" + _path, o => o.MigrationsAssembly(typeof(CustomDbContext).Assembly).MigrationsHistoryTable(CustomDbContext.MigrationsHistoryTableName))
+                .Options;
+            Store = new DiscoveryStore(this);
+        }
+
+        public DiscoveryStore Store { get; }
+
+        public static async Task<ConcurrentDb> CreateAsync(CancellationToken ct)
+        {
+            var db = new ConcurrentDb();
+            await using var context = new CustomDbContext(db._options);
+            await context.Database.MigrateAsync(ct);
+            return db;
+        }
+
+        public CustomDbContext CreateDbContext() => new(_options);
+
+        public async Task<CustomDbContext> CreateDbContextAsync(CancellationToken cancellationToken = default)
+        {
+            if (Interlocked.Increment(ref _arrived) <= Callers)
+            {
+                if (_arrived == Callers)
+                {
+                    _allArrived.TrySetResult();
+                }
+
+                await Task.WhenAny(_allArrived.Task, Task.Delay(150, cancellationToken));
+            }
+
+            return CreateDbContext();
+        }
+
+        public void Dispose()
+        {
+            Store.Dispose();
+            SqliteConnection.ClearAllPools();
+            File.Delete(_path);
+        }
     }
 }
