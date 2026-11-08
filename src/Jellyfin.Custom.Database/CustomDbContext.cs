@@ -35,6 +35,11 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
     /// </summary>
     public DbSet<CustomDiscoveryShown> DiscoveryShown => Set<CustomDiscoveryShown>();
 
+    /// <summary>
+    /// Gets the salts of re-picked days.
+    /// </summary>
+    public DbSet<CustomDiscoveryPickSalt> DiscoveryPickSalts => Set<CustomDiscoveryPickSalt>();
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -59,6 +64,7 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
             entity.ToTable("CustomDiscoveryLists");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).HasMaxLength(64).ValueGeneratedNever();
+            entity.Property(e => e.Group).HasMaxLength(100);
         });
 
         modelBuilder.Entity<CustomDiscoveryShown>(entity =>
@@ -66,6 +72,13 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
             entity.ToTable("CustomDiscoveryShown");
             entity.HasKey(e => e.TmdbId);
             entity.Property(e => e.TmdbId).ValueGeneratedNever();
+        });
+
+        modelBuilder.Entity<CustomDiscoveryPickSalt>(entity =>
+        {
+            entity.ToTable("CustomDiscoveryPickSalts");
+            entity.HasKey(e => e.Day);
+            entity.Property(e => e.Day).ValueGeneratedNever();
         });
     }
 }

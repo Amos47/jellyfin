@@ -30,6 +30,10 @@ namespace Jellyfin.Custom.Database.Migrations
                         .IsRequired()
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("Group")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Source")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -41,6 +45,23 @@ namespace Jellyfin.Custom.Database.Migrations
                     b.HasKey("Id");
 
                     b.ToTable("CustomDiscoveryLists", (string)null);
+                });
+
+            modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomDiscoveryPickSalt", b =>
+                {
+                    b.Property<DateOnly>("Day")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("DateCreated")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Salt")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Day");
+
+                    b.ToTable("CustomDiscoveryPickSalts", (string)null);
                 });
 
             modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomDiscoveryShown", b =>

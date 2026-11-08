@@ -9,4 +9,5 @@ namespace Jellyfin.Api.Models.DiscoveryDtos;
 /// <param name="Title">The title.</param>
 /// <param name="Source">The app the list came from.</param>
 /// <param name="Films">The films, in order.</param>
-public sealed record DiscoveryListDto(string Id, string Title, string Source, IReadOnlyList<DiscoveryFilmDto> Films);
+/// <param name="Group">The group of the list, or null for none.</param>
+public sealed record DiscoveryListDto(string Id, string Title, string Source, IReadOnlyList<DiscoveryFilmDto> Films, string? Group);

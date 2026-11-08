@@ -49,7 +49,10 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
             }
         }
 
-        return DiscoveryPicker.Pick(user.Id, day, eligible.Keys, maxRows).Select(id => eligible[id]).ToList();
+        // The day's re-pick salt, if an admin asked for new picks: every caller (the rows, the picks API, the trailer
+        // queue) reads it here, so they agree.
+        var salt = await _store.GetPickSaltAsync(day, cancellationToken).ConfigureAwait(false);
+        return DiscoveryPicker.Pick(user.Id, day, eligible.Values, maxRows, salt);
     }
 
     /// <inheritdoc />

@@ -13,7 +13,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Emby.Server.Implementations.Discovery;
 
 /// <summary>
-/// Fork: keeps discovery lists and the shown log in <see cref="CustomDbContext"/>.
+/// Fork: keeps discovery lists, the shown log and the re-pick salts in <see cref="CustomDbContext"/>.
 /// </summary>
 public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
 {
@@ -78,7 +78,7 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
                     .ConfigureAwait(false);
                 if (entity is null)
                 {
-                    entity = new CustomDiscoveryList { Id = list.Id, Title = list.Title, Source = list.Source, FilmsJson = filmsJson };
+                    entity = new CustomDiscoveryList { Id = list.Id, Title = list.Title, Source = list.Source, FilmsJson = filmsJson, Group = list.Group };
                     context.DiscoveryLists.Add(entity);
                 }
                 else
@@ -86,6 +86,7 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
                     entity.Title = list.Title;
                     entity.Source = list.Source;
                     entity.FilmsJson = filmsJson;
+                    entity.Group = list.Group;
                 }
 
                 entity.DateModified = DateTime.UtcNow;
@@ -175,9 +176,64 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    public async Task<string?> GetPickSaltAsync(DateOnly day, CancellationToken cancellationToken)
+    {
+        var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using (context.ConfigureAwait(false))
+        {
+            return await context.DiscoveryPickSalts
+                .AsNoTracking()
+                .Where(s => s.Day == day)
+                .Select(s => s.Salt)
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task SetPickSaltAsync(DateOnly day, string salt, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(salt);
+
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                var entity = await context.DiscoveryPickSalts
+                    .FirstOrDefaultAsync(s => s.Day == day, cancellationToken)
+                    .ConfigureAwait(false);
+                if (entity is null)
+                {
+                    context.DiscoveryPickSalts.Add(new CustomDiscoveryPickSalt { Day = day, Salt = salt, DateCreated = DateTime.UtcNow });
+                }
+                else
+                {
+                    entity.Salt = salt;
+                    entity.DateCreated = DateTime.UtcNow;
+                }
+
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                // Only the picks of today and later read a salt; a week of slack covers clock and time zone changes.
+                var cutoff = DateOnly.FromDateTime(DateTime.Now).AddDays(-7);
+                await context.DiscoveryPickSalts
+                    .Where(s => s.Day < cutoff && s.Day != day)
+                    .ExecuteDeleteAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
     private static DiscoveryList ToList(CustomDiscoveryList entity)
     {
         var films = JsonSerializer.Deserialize<List<DiscoveryFilmRef>>(entity.FilmsJson, JsonDefaults.Options) ?? [];
-        return new DiscoveryList(entity.Id, entity.Title, entity.Source, films);
+        return new DiscoveryList(entity.Id, entity.Title, entity.Source, films, entity.Group);
     }
 }

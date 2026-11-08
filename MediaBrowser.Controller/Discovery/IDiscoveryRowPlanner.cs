@@ -14,7 +14,8 @@ public interface IDiscoveryRowPlanner
 {
     /// <summary>
     /// Gets the lists picked for a user on a day, in display order. Only lists with at least one film the user may
-    /// see are eligible (an owned library film counts as visible); <see cref="DiscoveryPicker"/> picks among them.
+    /// see are eligible (an owned library film counts as visible); <see cref="DiscoveryPicker"/> picks among them, one
+    /// list per group, with the day's re-pick salt from <see cref="IDiscoveryStore.GetPickSaltAsync"/>.
     /// </summary>
     /// <param name="user">The user.</param>
     /// <param name="maxRows">The most lists to return.</param>
