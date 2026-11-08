@@ -109,7 +109,12 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
         return new HomeRowResult(dtos, items.Count, presentation) { Title = list.Title };
     }
 
-    private static int GetMaxRows(JsonObject config)
+    /// <summary>
+    /// Gets the maximum rows of a Movie discovery row's config: its <c>maxRows</c> setting, else the default.
+    /// </summary>
+    /// <param name="config">The row config.</param>
+    /// <returns>The maximum rows.</returns>
+    internal static int GetMaxRows(JsonObject config)
         => config[MaxRowsKey] is JsonValue v && v.TryGetValue<int>(out var max)
             ? Math.Clamp(max, 1, MaxMaxRows)
             : DefaultMaxRows;

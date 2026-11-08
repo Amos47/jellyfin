@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.ComponentModel.DataAnnotations;
 using System.Linq;
@@ -7,6 +8,8 @@ using System.Threading.Tasks;
 using Jellyfin.Api.Models.DiscoveryDtos;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Discovery;
+using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
@@ -21,9 +24,13 @@ namespace Jellyfin.Api.Controllers;
 [Tags("Discovery")]
 public partial class DiscoveryController : BaseJellyfinApiController
 {
+    private static readonly ExtraType[] _trailerTypes = [ExtraType.Trailer];
+
     private readonly IDiscoveryStore _store;
     private readonly IDiscoveryFilmSync _filmSync;
     private readonly IDiscoveryTrailers _trailers;
+    private readonly IDiscoveryUserPicks _picks;
+    private readonly IUserManager _userManager;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DiscoveryController"/> class.
@@ -31,11 +38,82 @@ public partial class DiscoveryController : BaseJellyfinApiController
     /// <param name="store">Instance of the <see cref="IDiscoveryStore"/> interface.</param>
     /// <param name="filmSync">Instance of the <see cref="IDiscoveryFilmSync"/> interface.</param>
     /// <param name="trailers">Instance of the <see cref="IDiscoveryTrailers"/> interface.</param>
-    public DiscoveryController(IDiscoveryStore store, IDiscoveryFilmSync filmSync, IDiscoveryTrailers trailers)
+    /// <param name="picks">Instance of the <see cref="IDiscoveryUserPicks"/> interface.</param>
+    /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
+    public DiscoveryController(
+        IDiscoveryStore store,
+        IDiscoveryFilmSync filmSync,
+        IDiscoveryTrailers trailers,
+        IDiscoveryUserPicks picks,
+        IUserManager userManager)
     {
         _store = store;
         _filmSync = filmSync;
         _trailers = trailers;
+        _picks = picks;
+        _userManager = userManager;
+    }
+
+    /// <summary>
+    /// Gets the films the home screens pick on a day: for every user with an enabled Movie discovery row, the films
+    /// of the lists picked for them. Nothing is recorded as shown.
+    /// </summary>
+    /// <param name="date">The day (server local), as yyyy-MM-dd. Defaults to tomorrow.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="200">Picks returned.</response>
+    /// <returns>The day and the TMDB ids of its picked films.</returns>
+    [HttpGet("Picks")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult<DiscoveryPicksDto>> GetPicks([FromQuery] DateOnly? date, CancellationToken cancellationToken)
+    {
+        var day = date ?? DateOnly.FromDateTime(DateTime.Now).AddDays(1);
+        var tmdbIds = new List<int>();
+        var seen = new HashSet<int>();
+        foreach (var user in _userManager.GetUsers())
+        {
+            foreach (var list in await _picks.GetPickedListsAsync(user, day, cancellationToken).ConfigureAwait(false))
+            {
+                tmdbIds.AddRange(list.Films.Select(f => f.TmdbId).Where(seen.Add));
+            }
+        }
+
+        return Ok(new DiscoveryPicksDto(day, tmdbIds));
+    }
+
+    /// <summary>
+    /// Gets the discovery films: every film of every list, each once, with whether it has a trailer and when it was
+    /// shown.
+    /// </summary>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="200">Films returned.</response>
+    /// <returns>The films.</returns>
+    [HttpGet("Films")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult<DiscoveryFilmStatusDto[]>> GetFilms(CancellationToken cancellationToken)
+    {
+        var lists = await _store.GetListsAsync(cancellationToken).ConfigureAwait(false);
+        var shown = await _store.GetShownAsync(cancellationToken).ConfigureAwait(false);
+        var films = new List<DiscoveryFilmStatusDto>();
+        var seen = new HashSet<int>();
+        foreach (var tmdbId in lists.SelectMany(l => l.Films).Select(f => f.TmdbId).Where(seen.Add))
+        {
+            // Every listed film has a virtual film once its list is saved; one missing is left out.
+            if (_filmSync.FindFilm(tmdbId) is not { } film)
+            {
+                continue;
+            }
+
+            var log = shown.GetValueOrDefault(tmdbId);
+            films.Add(new DiscoveryFilmStatusDto(
+                tmdbId,
+                film.Id,
+                film.Name,
+                film.GetExtras(_trailerTypes).Any(),
+                log?.FirstShown,
+                log?.LastShown));
+        }
+
+        return Ok(films.ToArray());
     }
 
     /// <summary>
