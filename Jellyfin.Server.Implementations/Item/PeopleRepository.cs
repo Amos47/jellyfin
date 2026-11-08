@@ -422,7 +422,7 @@ public class PeopleRepository(IDbContextFactory<JellyfinDbContext> dbProvider, I
             query = query.Where(e => context.PeopleBaseItemMap
                 .Any(m => m.PeopleId == e.Id && accessibleItems.Any(i => i.Id == m.ItemId)));
         }
-        else
+        else if (filter.ExcludeDiscoveryOnlyPeople)
         {
             // Fork: discovery - leave out people credited only on discovery items; uncredited people stay listed
             var visibleItems = queryHelpers.ApplyDiscoveryGuard(context, context.BaseItems.AsNoTracking());

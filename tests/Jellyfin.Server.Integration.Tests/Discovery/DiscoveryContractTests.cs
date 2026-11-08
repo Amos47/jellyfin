@@ -179,36 +179,42 @@ public sealed class DiscoveryContractTests : IClassFixture<JellyfinApplicationFa
 
         // Every leak is collected first, so one run shows which lists and callers leak.
         var failures = new List<string>();
-        foreach (var (variantClient, query) in variants)
+        try
         {
-            var where = variantClient == keyClient ? "API key" : variantClient == limitedClient ? "limited user" : "admin token" + query;
-            var genres = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Genres" + query);
-            var movieGenres = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Genres" + query + "&includeItemTypes=Movie");
-            var studios = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Studios" + query);
-            var persons = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Persons" + query);
-            var searchedPersons = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Persons" + query + "&searchTerm=Actor");
-
-            Check(genres, "/Genres", RealGenre, DiscoveryGenre);
-            Check(movieGenres, "/Genres?includeItemTypes=Movie", RealGenre, DiscoveryGenre);
-            Check(studios, "/Studios", RealStudio, DiscoveryStudio);
-            Check(persons, "/Persons", RealPerson, DiscoveryPerson);
-            Check(searchedPersons, "/Persons?searchTerm=Actor", RealPerson, DiscoveryPerson);
-
-            void Check(QueryResult<BaseItemDto> result, string list, string control, string hidden)
+            foreach (var (variantClient, query) in variants)
             {
-                if (!result.Items.Any(i => i.Name == control))
-                {
-                    failures.Add($"{where}: {list} is missing the control {control}");
-                }
+                var where = variantClient == keyClient ? "API key" : variantClient == limitedClient ? "limited user" : "admin token" + query;
+                var genres = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Genres" + query);
+                var movieGenres = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Genres" + query + "&includeItemTypes=Movie");
+                var studios = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Studios" + query);
+                var persons = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Persons" + query);
+                var searchedPersons = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Persons" + query + "&searchTerm=Actor");
 
-                if (result.Items.Any(i => i.Name == hidden))
+                Check(genres, "/Genres", RealGenre, DiscoveryGenre);
+                Check(movieGenres, "/Genres?includeItemTypes=Movie", RealGenre, DiscoveryGenre);
+                Check(studios, "/Studios", RealStudio, DiscoveryStudio);
+                Check(persons, "/Persons", RealPerson, DiscoveryPerson);
+                Check(searchedPersons, "/Persons?searchTerm=Actor", RealPerson, DiscoveryPerson);
+
+                void Check(QueryResult<BaseItemDto> result, string list, string control, string hidden)
                 {
-                    failures.Add($"{where}: {list} leaks {hidden}");
+                    if (!result.Items.Any(i => i.Name == control))
+                    {
+                        failures.Add($"{where}: {list} is missing the control {control}");
+                    }
+
+                    if (result.Items.Any(i => i.Name == hidden))
+                    {
+                        failures.Add($"{where}: {list} leaks {hidden}");
+                    }
                 }
             }
         }
+        finally
+        {
+            await userManager.DeleteUserAsync(limited.Id);
+        }
 
-        await userManager.DeleteUserAsync(limited.Id);
         Assert.True(failures.Count == 0, string.Join(Environment.NewLine, failures));
 
         // A by-name list of the discovery folder itself holds nothing.
@@ -252,6 +258,43 @@ public sealed class DiscoveryContractTests : IClassFixture<JellyfinApplicationFa
         // Back to discovery-only: hidden again.
         var after = await GetAsync<QueryResult<BaseItemDto>>(client, $"Persons?userId={contract.UserId:N}");
         Assert.DoesNotContain(after.Items, p => p.Name == DiscoveryPerson);
+    }
+
+    [Fact]
+    public async Task FilmPage_ListsItsCast()
+    {
+        // Hiding discovery-only cast is for the /Persons listing alone: the film's own page keeps its cast.
+        var (contract, client) = await SetUpAsync();
+
+        var film = await GetAsync<BaseItemDto>(client, $"Items/{contract.Film.Id:N}?userId={contract.UserId:N}");
+
+        Assert.Contains(film.People ?? [], p => p.Name == DiscoveryPerson);
+    }
+
+    [Fact]
+    public async Task PeopleValidator_KeepsDiscoveryCast()
+    {
+        // The Refresh People task deletes Person items no credit calls for; discovery-only cast are credited.
+        var (contract, client) = await SetUpAsync();
+        var person = LibraryManager.GetPerson(DiscoveryPerson);
+        Assert.NotNull(person);
+
+        // Mark every person refreshed so the task only sweeps: refreshing one would ask TMDB (no network in tests).
+        foreach (var item in LibraryManager.GetItemList(new InternalItemsQuery { IncludeItemTypes = [BaseItemKind.Person] }))
+        {
+            item.DateLastRefreshed = DateTime.UtcNow;
+            await item.UpdateToRepositoryAsync(ItemUpdateType.MetadataImport, Ct);
+        }
+
+        await ActivatorUtilities.CreateInstance<PeopleValidator>(_factory.Services).Run(new Progress<double>(), Ct);
+
+        Assert.NotNull(LibraryManager.GetItemById(person.Id));
+        Assert.NotNull(LibraryManager.GetPerson(DiscoveryPerson));
+        var film = await GetAsync<BaseItemDto>(client, $"Items/{contract.Film.Id:N}?userId={contract.UserId:N}");
+        Assert.Contains(film.People ?? [], p => p.Name == DiscoveryPerson);
+        var persons = await GetAsync<QueryResult<BaseItemDto>>(client, $"Persons?userId={contract.UserId:N}");
+        Assert.DoesNotContain(persons.Items, p => p.Name == DiscoveryPerson);
+        Assert.Contains(persons.Items, p => p.Name == RealPerson);
     }
 
     [Fact]
