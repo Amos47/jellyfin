@@ -30,6 +30,7 @@ public class MovieDiscoveryProviderTests
     private readonly User _user = new("tester", "Default", "Default");
     private readonly List<IReadOnlyList<BaseItem>> _converted = [];
     private readonly List<(int[] TmdbIds, DateOnly Day)> _shown = [];
+    private readonly List<DiscoveryList> _stored = [];
 
     public MovieDiscoveryProviderTests()
     {
@@ -45,13 +46,25 @@ public class MovieDiscoveryProviderTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private HomeRowContext Context(int subRow = 0) => new(_user, new DtoOptions(), _now) { SubRow = subRow };
+    private HomeRowContext Context(string? key = "a") => new(_user, new DtoOptions(), _now) { SubRowKey = key };
 
+    // The picked lists are also in the store, with any extra lists.
     private MovieDiscoveryProvider CreateProvider(params DiscoveryList[] picked)
+        => CreateProvider(picked, []);
+
+    private MovieDiscoveryProvider CreateProvider(DiscoveryList[] picked, DiscoveryList[] alsoStored)
     {
         _planner
             .Setup(p => p.GetPickedListsAsync(_user, It.IsAny<int>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .Returns<User, int, DateOnly, CancellationToken>((_, max, _, _) => Task.FromResult<IReadOnlyList<DiscoveryList>>(picked.Take(max).ToArray()));
+        _stored.Clear();
+        _stored.AddRange(picked.Concat(alsoStored).OrderBy(l => l.Id, StringComparer.Ordinal));
+        _store
+            .Setup(s => s.GetListsAsync(It.IsAny<CancellationToken>()))
+            .ReturnsAsync(() => _stored.ToArray());
+        _store
+            .Setup(s => s.GetListAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((string id, CancellationToken _) => _stored.FirstOrDefault(l => l.Id == id));
         return new MovieDiscoveryProvider(_planner.Object, _store.Object, _adapter.Object, NullLogger<MovieDiscoveryProvider>.Instance);
     }
 
@@ -102,28 +115,69 @@ public class MovieDiscoveryProviderTests
     }
 
     [Fact]
-    public async Task RowCount_IsPickedListCount_CappedAtMaxRows()
+    public async Task SubRows_ArePickedListIds_InPickOrder_CappedAtMaxRows()
     {
-        var provider = CreateProvider(List("a", 1), List("b", 2), List("c", 3));
+        var provider = CreateProvider(List("c", 3), List("a", 1), List("b", 2));
 
-        var count = await provider.GetRowCountAsync(Context(), new JsonObject { ["maxRows"] = 2 }, Ct);
-        var none = await CreateProvider().GetRowCountAsync(Context(), new JsonObject { ["maxRows"] = 3 }, Ct);
+        var rows = await provider.GetSubRowsAsync(Context(null), new JsonObject { ["maxRows"] = 2 }, Ct);
+        var none = await CreateProvider().GetSubRowsAsync(Context(null), new JsonObject { ["maxRows"] = 3 }, Ct);
 
-        Assert.Equal(2, count);
-        Assert.Equal(0, none);
+        Assert.Equal(new[] { "c", "a" }, rows.Select(r => r.Key));
+        Assert.Empty(none);
         _planner.Verify(p => p.GetPickedListsAsync(_user, 2, _today, It.IsAny<CancellationToken>()));
     }
 
     [Fact]
-    public async Task RowCount_MissingMaxRows_UsesDefaultThree()
+    public async Task SubRows_MissingMaxRows_UsesDefaultThree()
     {
         var provider = CreateProvider(List("a", 1), List("b", 2), List("c", 3), List("d", 4));
 
-        Assert.Equal(3, await provider.GetRowCountAsync(Context(), new JsonObject(), Ct));
+        Assert.Equal(3, (await provider.GetSubRowsAsync(Context(null), new JsonObject(), Ct)).Count);
     }
 
     [Fact]
-    public async Task Items_SubRow_ReturnsListTitleAndOrder()
+    public async Task ResolvableKeys_AreEveryStoredListId()
+    {
+        var provider = CreateProvider([List("a", 1)], [List("b", 2), List("c", 3)]);
+
+        var keys = await provider.GetResolvableSubRowKeysAsync(Context(null), new JsonObject { ["maxRows"] = 1 }, Ct);
+
+        Assert.Equal(new[] { "a", "b", "c" }, keys.Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Items_KeyNotPickedToday_ServesThatList()
+    {
+        var a = List("a", 1);
+        var retired = List("retired", 30, 31);
+        var provider = CreateProvider([a], [retired]);
+        var items = new[] { Item(30), Item(31) };
+        SetRowItems(retired, items);
+
+        var result = await provider.GetItemsAsync(Context("retired"), new JsonObject { ["maxRows"] = 1 }, new HomeRowPaging(0, 20), Ct);
+
+        Assert.Equal("Title of retired", result.Title);
+        Assert.Equal(items.Select(i => i.Item.Id), result.Items.Select(i => i.Id));
+        Assert.Equal(2, result.TotalRecordCount);
+        Assert.Equal([30, 31], Assert.Single(_shown).TmdbIds);
+    }
+
+    [Fact]
+    public async Task Items_NoKey_ServesFirstPick()
+    {
+        // The parent row's own id (no sub-row): today's first pick, as before.
+        var a = List("a", 1);
+        var b = List("b", 2);
+        var provider = CreateProvider(b, a);
+        SetRowItems(b, Item(2));
+
+        var result = await provider.GetItemsAsync(Context(null), new JsonObject(), new HomeRowPaging(0, 20), Ct);
+
+        Assert.Equal("Title of b", result.Title);
+    }
+
+    [Fact]
+    public async Task Items_Key_ReturnsListTitleAndOrder()
     {
         var a = List("a", 1);
         var b = List("b", 20, 21, 22);
@@ -131,7 +185,7 @@ public class MovieDiscoveryProviderTests
         var items = new[] { Item(20), Item(21), Item(22) };
         SetRowItems(b, items);
 
-        var result = await provider.GetItemsAsync(Context(subRow: 1), new JsonObject { ["maxRows"] = 3 }, new HomeRowPaging(0, 20), Ct);
+        var result = await provider.GetItemsAsync(Context("b"), new JsonObject { ["maxRows"] = 3 }, new HomeRowPaging(0, 20), Ct);
 
         Assert.Equal("Title of b", result.Title);
         Assert.Equal(items.Select(i => i.Item.Id), result.Items.Select(i => i.Id));
@@ -155,11 +209,11 @@ public class MovieDiscoveryProviderTests
     }
 
     [Fact]
-    public async Task Items_SubRowBeyondPicks_Empty()
+    public async Task Items_UnknownKey_Empty()
     {
         var provider = CreateProvider(List("a", 1));
 
-        var result = await provider.GetItemsAsync(Context(subRow: 1), new JsonObject(), new HomeRowPaging(0, 20), Ct);
+        var result = await provider.GetItemsAsync(Context("deleted"), new JsonObject(), new HomeRowPaging(0, 20), Ct);
 
         Assert.Empty(result.Items);
         Assert.Equal(0, result.TotalRecordCount);

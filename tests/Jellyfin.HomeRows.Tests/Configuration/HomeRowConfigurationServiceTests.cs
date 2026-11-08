@@ -563,7 +563,10 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
         var derived = expanded.Rows.Take(2).ToArray();
         Assert.False(derived[0].Row.Id.Equals(derived[1].Row.Id));
         Assert.All(derived, d => Assert.False(d.Row.Id.Equals(parent.Id)));
-        Assert.Equal(new[] { 0, 1 }, derived.Select(d => d.SubRow));
+        Assert.Equal(new[] { "list-0", "list-1" }, derived.Select(d => d.SubRowKey));
+        Assert.Equal(
+            new[] { HomeRowConfigurationService.GetDerivedRowId(parent.Id, "list-0"), HomeRowConfigurationService.GetDerivedRowId(parent.Id, "list-1") },
+            derived.Select(d => d.Row.Id));
         Assert.Equal(derived.Select(d => d.Row.Id), again.Rows.Take(2).Select(r => r.Row.Id));
         Assert.All(derived, d =>
         {
@@ -598,18 +601,37 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     }
 
     [Fact]
-    public void DerivedRowId_IsMd5OfParentBytesAndIndex()
+    public void DerivedRowId_IsMd5OfParentBytesAndUtf8Key()
     {
         var parent = Guid.Parse("0f8fad5b-d9cb-469f-a165-70867728950e");
-        var bytes = parent.ToByteArray().Concat(BitConverter.GetBytes(1)).ToArray();
+        var other = Guid.Parse("7c9e6679-7425-40de-944b-e07fc1f90ae7");
+        var bytes = parent.ToByteArray().Concat(System.Text.Encoding.UTF8.GetBytes("romance-new")).ToArray();
         // Not security related: the expected value of the id derivation.
 #pragma warning disable CA5351
         var expected = new Guid(System.Security.Cryptography.MD5.HashData(bytes));
 #pragma warning restore CA5351
 
-        Assert.True(BitConverter.IsLittleEndian);
-        Assert.Equal(expected, HomeRowConfigurationService.GetDerivedRowId(parent, 1));
-        Assert.NotEqual(HomeRowConfigurationService.GetDerivedRowId(parent, 0), HomeRowConfigurationService.GetDerivedRowId(parent, 1));
+        Assert.Equal(expected, HomeRowConfigurationService.GetDerivedRowId(parent, "romance-new"));
+        Assert.Equal(HomeRowConfigurationService.GetDerivedRowId(parent, "romance-new"), HomeRowConfigurationService.GetDerivedRowId(parent, "romance-new"));
+        Assert.NotEqual(HomeRowConfigurationService.GetDerivedRowId(parent, "romance-new"), HomeRowConfigurationService.GetDerivedRowId(parent, "pixar"));
+        Assert.NotEqual(HomeRowConfigurationService.GetDerivedRowId(parent, "romance-new"), HomeRowConfigurationService.GetDerivedRowId(other, "romance-new"));
+        Assert.NotEqual(parent, HomeRowConfigurationService.GetDerivedRowId(parent, string.Empty));
+    }
+
+    [Fact]
+    public async Task Expand_UsesSubRowKeys_InProviderOrder()
+    {
+        var service = CreateService();
+        var parent = Row(Expanding);
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
+        _expanding.Keys = ["pixar", "romance-new", "noir"];
+
+        var expanded = await service.ExpandAsync(_user, await service.GetEffectiveLayoutAsync(_user, Ct), Ct);
+
+        Assert.Equal(new[] { "pixar", "romance-new", "noir" }, expanded.Rows.Select(r => r.SubRowKey));
+        Assert.Equal(
+            new[] { "pixar", "romance-new", "noir" }.Select(k => HomeRowConfigurationService.GetDerivedRowId(parent.Id, k)),
+            expanded.Rows.Select(r => r.Row.Id));
     }
 
     [Fact]
@@ -666,7 +688,7 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task FindRow_DerivedId_ReturnsParentWithSubRow()
+    public async Task FindRow_DerivedId_ReturnsParentWithSubRowKey()
     {
         var service = CreateService();
         var parent = Row(Expanding);
@@ -679,10 +701,48 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
 
         Assert.NotNull(found);
         Assert.Equal(parent.Id, found.Row.Id);
-        Assert.Equal(2, found.SubRow);
+        Assert.Equal("list-2", found.SubRowKey);
         Assert.NotNull(direct);
-        Assert.Equal(0, direct.SubRow);
+        Assert.Null(direct.SubRowKey);
         Assert.Null(await service.FindRowAsync(_other, expanded.Rows[2].Row.Id, Ct));
+    }
+
+    [Fact]
+    public async Task FindRow_KeyNoLongerPickedButResolvable_ReturnsIt()
+    {
+        var service = CreateService();
+        var parent = Row(Expanding);
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
+        _expanding.Keys = ["romance-new", "pixar"];
+        var expanded = await service.ExpandAsync(_user, await service.GetEffectiveLayoutAsync(_user, Ct), Ct);
+        var romance = expanded.Rows[0].Row.Id;
+
+        // The picks change (a re-pick, a list replaced, midnight): romance is no longer shown, but still in the store.
+        _expanding.Keys = ["pixar", "noir"];
+        _expanding.ExtraResolvable = ["romance-new"];
+
+        var found = await service.FindRowAsync(_user, romance, Ct);
+
+        Assert.NotNull(found);
+        Assert.Equal(parent.Id, found.Row.Id);
+        Assert.Equal("romance-new", found.SubRowKey);
+
+        // Deleted from the store: no longer resolvable, so the id is unknown.
+        _expanding.ExtraResolvable = [];
+        Assert.Null(await service.FindRowAsync(_user, romance, Ct));
+    }
+
+    [Fact]
+    public async Task FindRow_ResolvableKeysFail_DerivedIdUnknown_ParentStillFound()
+    {
+        var service = CreateService();
+        var parent = Row(Expanding);
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
+        _expanding.Keys = ["a"];
+        _expanding.FailResolvable = true;
+
+        Assert.Null(await service.FindRowAsync(_user, HomeRowConfigurationService.GetDerivedRowId(parent.Id, "a"), Ct));
+        Assert.NotNull(await service.FindRowAsync(_user, parent.Id, Ct));
     }
 
     [Fact]
@@ -692,7 +752,9 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
         var parent = Row(Expanding) with { Enabled = false };
         Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
 
-        Assert.Null(await service.FindRowAsync(_user, HomeRowConfigurationService.GetDerivedRowId(parent.Id, 0), Ct));
+        _expanding.Keys = ["list-0"];
+
+        Assert.Null(await service.FindRowAsync(_user, HomeRowConfigurationService.GetDerivedRowId(parent.Id, "list-0"), Ct));
     }
 
     [Fact]
@@ -723,9 +785,42 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
         var parent = Row(Expanding);
         Assert.Empty(await service.SaveAdminDefaultAsync(_admin, [parent], Ct));
 
-        var errors = await service.SaveAdminDefaultAsync(_admin, [Row(Expanding) with { Id = HomeRowConfigurationService.GetDerivedRowId(parent.Id, 0) }], Ct);
+        _expanding.Keys = ["list-0"];
+
+        var errors = await service.SaveAdminDefaultAsync(_admin, [Row(Expanding) with { Id = HomeRowConfigurationService.GetDerivedRowId(parent.Id, "list-0") }], Ct);
 
         Assert.Equal("id", Assert.Single(errors).Key);
+    }
+
+    [Fact]
+    public async Task Save_DerivedIdOfResolvableKeyNotPickedToday_IsRejected()
+    {
+        var service = CreateService();
+        var parent = Row(Expanding);
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
+        _expanding.Keys = [];
+        _expanding.ExtraResolvable = ["retired"];
+
+        var errors = await service.SaveUserLayoutAsync(_user, [parent, Row(HomeRowProviderIds.NextUp) with { Id = HomeRowConfigurationService.GetDerivedRowId(parent.Id, "retired") }], Ct);
+
+        var error = Assert.Single(errors);
+        Assert.Equal(1, error.RowIndex);
+        Assert.Equal("id", error.Key);
+    }
+
+    [Fact]
+    public async Task Save_ResolvableKeysFail_LayoutStillSaved()
+    {
+        var service = CreateService();
+        var parent = Row(Expanding);
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
+        _expanding.FailResolvable = true;
+        var next = Row(HomeRowProviderIds.NextUp);
+
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent, next], Ct));
+        Assert.Empty(await service.SaveAdminDefaultAsync(_admin, [parent, next], Ct));
+
+        Assert.Equal(new[] { parent.Id, next.Id }, (await service.GetEffectiveLayoutAsync(_user, Ct)).Rows.Select(r => r.Row.Id));
     }
 
     [Fact]
@@ -826,9 +921,21 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
 
     private sealed class FakeExpandingProvider(string id) : IExpandingHomeRowProvider
     {
-        public int Lists { get; set; }
+        // Today's sub-row keys, in order; Lists sets them to list-0, list-1, ...
+        public IReadOnlyList<string> Keys { get; set; } = [];
+
+        public int Lists
+        {
+            get => Keys.Count;
+            set => Keys = Enumerable.Range(0, value).Select(i => "list-" + i).ToArray();
+        }
+
+        // Keys the provider can still serve beyond today's.
+        public IReadOnlyList<string> ExtraResolvable { get; set; } = [];
 
         public bool Fail { get; set; }
+
+        public bool FailResolvable { get; set; }
 
         public bool IgnoreMaxRows { get; set; }
 
@@ -849,7 +956,7 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
                 new HomeRowSetting("cardStyle", HomeRowSettingType.String, "Card style") { Default = "poster" }
             ]));
 
-        public Task<int> GetRowCountAsync(HomeRowContext context, JsonObject config, CancellationToken ct)
+        public Task<IReadOnlyList<HomeSubRow>> GetSubRowsAsync(HomeRowContext context, JsonObject config, CancellationToken ct)
         {
             CountCalls++;
             LastConfig = config;
@@ -858,7 +965,18 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
                 throw new InvalidOperationException("The lists are unavailable.");
             }
 
-            return Task.FromResult(IgnoreMaxRows ? Lists : Math.Min(Lists, (int)config["maxRows"]!));
+            var keys = IgnoreMaxRows ? Keys : Keys.Take((int)config["maxRows"]!);
+            return Task.FromResult<IReadOnlyList<HomeSubRow>>(keys.Select(k => new HomeSubRow(k)).ToArray());
+        }
+
+        public Task<IReadOnlyList<string>> GetResolvableSubRowKeysAsync(HomeRowContext context, JsonObject config, CancellationToken ct)
+        {
+            if (Fail || FailResolvable)
+            {
+                throw new InvalidOperationException("The lists are unavailable.");
+            }
+
+            return Task.FromResult<IReadOnlyList<string>>(Keys.Concat(ExtraResolvable).ToArray());
         }
 
         public Task<HomeRowResult> GetItemsAsync(HomeRowContext context, JsonObject config, HomeRowPaging paging, CancellationToken cancellationToken)

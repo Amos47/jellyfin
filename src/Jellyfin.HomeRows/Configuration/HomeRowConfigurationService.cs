@@ -1,8 +1,8 @@
 using System;
-using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -236,14 +236,27 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
             return row;
         }
 
-        // A derived id of an expanded row: the parent row, with the sub row it stands for.
+        // A derived id of an expanded row: the parent row, with the key of the sub-row it names. Every key the provider
+        // can still serve matches, not only today's, so a client holding an older layout gets the same content.
+        var context = new HomeRowContext(user, new DtoOptions(), DateTime.UtcNow);
         foreach (var parent in layout.Rows.Where(IsExpanding))
         {
-            for (var i = 0; i < MaxExpandedRows; i++)
+            IReadOnlyList<string> keys;
+            try
             {
-                if (GetDerivedRowId(parent.Row.Id, i).Equals(rowId))
+                keys = await GetResolvableSubRowKeysAsync(context, parent.Row, null, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                _logger.LogError(ex, "Resolving the expanded rows of home row {RowId} of provider {ProviderId} failed", parent.Row.Id, parent.Row.Provider);
+                continue;
+            }
+
+            foreach (var key in keys)
+            {
+                if (GetDerivedRowId(parent.Row.Id, key).Equals(rowId))
                 {
-                    return parent with { SubRow = i };
+                    return parent with { SubRowKey = key };
                 }
             }
         }
@@ -268,24 +281,24 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
             }
 
             var provider = (IExpandingHomeRowProvider)_providerFactory.Get(row.Row.Provider)!;
-            int count;
+            IReadOnlyList<HomeSubRow> subRows;
             try
             {
                 var schema = await provider.GetSchemaAsync(context, ct).ConfigureAwait(false);
                 var config = HomeRowConfigValidator.Validate(schema, row.Row.Config).Config;
-                count = Math.Clamp(await provider.GetRowCountAsync(context, config, ct).ConfigureAwait(false), 0, MaxExpandedRows);
+                subRows = await provider.GetSubRowsAsync(context, config, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 // One failing provider must not break the layout: its row is left out.
                 _logger.LogError(ex, "Expanding home row {RowId} of provider {ProviderId} failed", row.Row.Id, row.Row.Provider);
-                count = 0;
+                subRows = [];
             }
 
-            for (var i = 0; i < count; i++)
+            foreach (var subRow in subRows.DistinctBy(r => r.Key, StringComparer.Ordinal).Take(MaxExpandedRows))
             {
                 // Title = null: each derived row is named by its own list title from /Items, not the parent's custom title.
-                rows.Add(row with { Row = row.Row with { Id = GetDerivedRowId(row.Row.Id, i), Title = null }, SubRow = i });
+                rows.Add(row with { Row = row.Row with { Id = GetDerivedRowId(row.Row.Id, subRow.Key), Title = null }, SubRowKey = subRow.Key });
             }
         }
 
@@ -293,18 +306,21 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
     }
 
     /// <summary>
-    /// Gets the id of row <paramref name="index"/> of an expanded row: a GUID made of the MD5 of the 16 bytes of
-    /// <paramref name="parentId"/> (<see cref="Guid.ToByteArray()"/>) followed by <paramref name="index"/> as a
-    /// 32 bit little-endian integer.
+    /// Gets the id of the row of an expanded row with sub-row key <paramref name="key"/>: a GUID made of the MD5 of
+    /// the 16 bytes of <paramref name="parentId"/> (<see cref="Guid.ToByteArray()"/>) followed by the UTF-8 bytes of
+    /// <paramref name="key"/>. The id names the sub-row's content (Movie discovery: its list), not its position, so it
+    /// is the same whatever else is shown that day.
     /// </summary>
     /// <param name="parentId">The id of the layout row.</param>
-    /// <param name="index">The index of the derived row, from 0.</param>
+    /// <param name="key">The <see cref="HomeSubRow.Key"/> of the derived row.</param>
     /// <returns>The derived row id.</returns>
-    public static Guid GetDerivedRowId(Guid parentId, int index)
+    public static Guid GetDerivedRowId(Guid parentId, string key)
     {
-        Span<byte> bytes = stackalloc byte[20];
+        ArgumentNullException.ThrowIfNull(key);
+
+        var bytes = new byte[16 + Encoding.UTF8.GetByteCount(key)];
         parentId.TryWriteBytes(bytes);
-        BinaryPrimitives.WriteInt32LittleEndian(bytes[16..], index);
+        Encoding.UTF8.GetBytes(key, bytes.AsSpan(16));
         Span<byte> hash = stackalloc byte[MD5.HashSizeInBytes];
 
         // Not security related: MD5 only derives a stable row id, like upstream's GetMD5.
@@ -377,6 +393,27 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         }
     }
 
+    // The keys an expanding row's provider can still serve, with the row's config validated against its schema.
+    private async Task<IReadOnlyList<string>> GetResolvableSubRowKeysAsync(
+        HomeRowContext context,
+        HomeRowInstance row,
+        Dictionary<string, HomeRowSchema>? schemas,
+        CancellationToken ct)
+    {
+        var provider = (IExpandingHomeRowProvider)_providerFactory.Get(row.Provider)!;
+        if (schemas is null || !schemas.TryGetValue(provider.Id, out var schema))
+        {
+            schema = await provider.GetSchemaAsync(context, ct).ConfigureAwait(false);
+            if (schemas is not null)
+            {
+                schemas[provider.Id] = schema;
+            }
+        }
+
+        var config = HomeRowConfigValidator.Validate(schema, row.Config ?? new JsonObject()).Config;
+        return await provider.GetResolvableSubRowKeysAsync(context, config, ct).ConfigureAwait(false);
+    }
+
     private bool IsExpanding(EffectiveHomeRow row)
         => row.Row.Enabled && row.IsAvailable && _providerFactory.Get(row.Row.Provider) is IExpandingHomeRowProvider;
 
@@ -402,10 +439,25 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         var ids = new HashSet<Guid>();
 
         // Ruling: the ids of expanded rows are rejected, so saving the display view can't multiply an expanding row.
-        var derivedIds = stored.Concat(rows)
-            .Where(r => _providerFactory.Get(r.Provider) is IExpandingHomeRowProvider)
-            .SelectMany(r => Enumerable.Range(0, MaxExpandedRows).Select(i => GetDerivedRowId(r.Id, i)))
-            .ToHashSet();
+        // Any key the provider can still serve counts, as FindRowAsync would resolve it.
+        var derivedIds = new HashSet<Guid>();
+        var expanding = stored.Concat(rows)
+            .Where(r => !string.IsNullOrEmpty(r.Provider) && _providerFactory.Get(r.Provider) is IExpandingHomeRowProvider)
+            .DistinctBy(r => (r.Id, r.Provider));
+        foreach (var row in expanding)
+        {
+            try
+            {
+                var keys = await GetResolvableSubRowKeysAsync(context, row, schemas, ct).ConfigureAwait(false);
+                derivedIds.UnionWith(keys.Select(k => GetDerivedRowId(row.Id, k)));
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                // The check is a guard against echoing the display view; a failing provider must not block saving.
+                _logger.LogWarning(ex, "Listing the expanded rows of home row {RowId} of provider {ProviderId} failed; their ids are not checked", row.Id, row.Provider);
+            }
+        }
+
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];

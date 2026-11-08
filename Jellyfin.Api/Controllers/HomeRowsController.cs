@@ -257,7 +257,7 @@ public class HomeRowsController : BaseJellyfinApiController
         var row = effective.Row;
         var dtoOptions = new DtoOptions { Fields = fields }
             .AddAdditionalDtoOptions(enableImages, enableUserData, imageTypeLimit, enableImageTypes);
-        var context = new HomeRowContext(user, dtoOptions, DateTime.UtcNow) { SubRow = effective.SubRow };
+        var context = new HomeRowContext(user, dtoOptions, DateTime.UtcNow) { SubRowKey = effective.SubRowKey };
         try
         {
             var schema = await provider.GetSchemaAsync(context, cancellationToken).ConfigureAwait(false);
