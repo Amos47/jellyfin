@@ -4,6 +4,7 @@ using System.Net;
 using System.Net.Http;
 using System.Net.Http.Json;
 using System.Threading.Tasks;
+using Emby.Server.Implementations.Library;
 using Jellyfin.Data.Enums;
 using Jellyfin.Extensions.Json;
 using MediaBrowser.Controller.Entities;
@@ -42,39 +43,54 @@ public sealed class DiscoveryGuardTests : IClassFixture<JellyfinApplicationFacto
         var (client, userId) = await SetUpAsync();
         var seed = await DiscoverySeed.EnsureAsync(_factory);
 
-        using var response = await client.GetAsync($"Items?parentId={seed.FolderId:N}&userId={userId:N}", TestContext.Current.CancellationToken);
+        // Today the folder answers 200 with no items, plain and recursive.
+        var plain = await GetAsync<QueryResult<BaseItemDto>>(client, $"Items?parentId={seed.FolderId:N}&userId={userId:N}");
+        var recursive = await GetAsync<QueryResult<BaseItemDto>>(client, $"Items?parentId={seed.FolderId:N}&recursive=true&userId={userId:N}");
 
-        // Hidden folder: either refused outright or empty, never the virtual film.
-        if (response.StatusCode == HttpStatusCode.OK)
-        {
-            var result = await response.Content.ReadFromJsonAsync<QueryResult<BaseItemDto>>(JsonDefaults.Options, TestContext.Current.CancellationToken);
-            Assert.NotNull(result);
-            Assert.Empty(result.Items);
-        }
-        else
-        {
-            Assert.True(response.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Forbidden, response.StatusCode.ToString());
-        }
-
-        using var recursive = await client.GetAsync($"Items?parentId={seed.FolderId:N}&recursive=true&userId={userId:N}", TestContext.Current.CancellationToken);
-        if (recursive.StatusCode == HttpStatusCode.OK)
-        {
-            var result = await recursive.Content.ReadFromJsonAsync<QueryResult<BaseItemDto>>(JsonDefaults.Options, TestContext.Current.CancellationToken);
-            Assert.NotNull(result);
-            Assert.Empty(result.Items);
-        }
+        Assert.Empty(plain.Items);
+        Assert.Empty(recursive.Items);
     }
 
     [Fact]
-    public async Task Items_ByIds_ExcludesDiscovery()
+    public async Task Items_ByIds_ReturnsDiscovery()
     {
+        // Ruling: an explicit ids query bypasses the guard, so clients can refetch a played or queued film.
         var (client, userId) = await SetUpAsync();
         var seed = await DiscoverySeed.EnsureAsync(_factory);
 
         var result = await GetAsync<QueryResult<BaseItemDto>>(client, $"Items?ids={seed.SeedFilm.Id:N},{seed.RealFilm.Id:N}&userId={userId:N}");
 
         Assert.Contains(result.Items, i => i.Id.Equals(seed.RealFilm.Id));
-        Assert.DoesNotContain(result.Items, i => i.Id.Equals(seed.SeedFilm.Id));
+        Assert.Contains(result.Items, i => i.Id.Equals(seed.SeedFilm.Id));
+    }
+
+    [Fact]
+    public async Task Repository_ByIds_ReturnsDiscoveryFilmAndTrailer()
+    {
+        var seed = await DiscoverySeed.EnsureAsync(_factory);
+        var libraryManager = _factory.Services.GetRequiredService<ILibraryManager>();
+
+        var items = libraryManager.GetItemList(new InternalItemsQuery { ItemIds = [seed.SeedFilm.Id, seed.SeedTrailer.Id] });
+
+        Assert.Contains(items, i => i.Id.Equals(seed.SeedFilm.Id));
+        Assert.Contains(items, i => i.Id.Equals(seed.SeedTrailer.Id));
+    }
+
+    [Fact]
+    public async Task Scan_KeepsDiscoveryFilmAndTrailer()
+    {
+        var seed = await DiscoverySeed.EnsureAsync(_factory);
+        var libraryManager = _factory.Services.GetRequiredService<ILibraryManager>();
+
+        // ValidateMediaLibrary only queues the task; this runs a scan to completion.
+        await ((LibraryManager)libraryManager).ValidateMediaLibraryInternal(new Progress<double>(), TestContext.Current.CancellationToken);
+
+        Assert.NotNull(libraryManager.GetItemById(seed.SeedFilm.Id));
+        Assert.NotNull(libraryManager.GetItemById(seed.SeedTrailer.Id));
+        var films = libraryManager.GetItemList(new InternalItemsQuery { IncludeDiscovery = true, AncestorIds = [seed.FolderId] });
+        var extras = libraryManager.GetItemList(new InternalItemsQuery { IncludeDiscovery = true, OwnerIds = [seed.SeedFilm.Id] });
+        Assert.Contains(films, i => i.Id.Equals(seed.SeedFilm.Id));
+        Assert.Contains(extras, i => i.Id.Equals(seed.SeedTrailer.Id));
     }
 
     [Fact]
