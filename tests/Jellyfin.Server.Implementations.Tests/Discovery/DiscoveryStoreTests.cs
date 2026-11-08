@@ -89,6 +89,26 @@ public sealed class DiscoveryStoreTests : IAsyncLifetime, IDisposable
         Assert.Equal(new DiscoveryShown(7, new DateOnly(2026, 11, 9), new DateOnly(2026, 11, 9)), shown[7]);
     }
 
+    [Fact]
+    public async Task SetList_ConcurrentSameNewId_DoesNotThrow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(i =>
+            _store.SetListAsync(new DiscoveryList("same", "T" + i, "s", [new(i, null)]), ct)));
+
+        Assert.Single(await _store.GetListsAsync(ct));
+    }
+
+    [Fact]
+    public async Task MarkShown_ConcurrentSameNewId_DoesNotThrow()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await Task.WhenAll(Enumerable.Range(0, 8).Select(_ =>
+            _store.MarkShownAsync([42, 43], new DateOnly(2026, 11, 7), ct)));
+
+        Assert.Equal(2, (await _store.GetShownAsync(ct)).Count);
+    }
+
     private sealed class Factory(DbContextOptions<CustomDbContext> options) : IDbContextFactory<CustomDbContext>
     {
         public CustomDbContext CreateDbContext() => new(options);

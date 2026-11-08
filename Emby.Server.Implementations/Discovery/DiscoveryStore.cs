@@ -15,9 +15,10 @@ namespace Emby.Server.Implementations.Discovery;
 /// <summary>
 /// Fork: keeps discovery lists and the shown log in <see cref="CustomDbContext"/>.
 /// </summary>
-public sealed class DiscoveryStore : IDiscoveryStore
+public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
 {
     private readonly IDbContextFactory<CustomDbContext> _dbFactory;
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DiscoveryStore"/> class.
@@ -27,6 +28,9 @@ public sealed class DiscoveryStore : IDiscoveryStore
     {
         _dbFactory = dbFactory;
     }
+
+    /// <inheritdoc />
+    public void Dispose() => _writeLock.Dispose();
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<DiscoveryList>> GetListsAsync(CancellationToken cancellationToken)
@@ -60,76 +64,103 @@ public sealed class DiscoveryStore : IDiscoveryStore
     /// <inheritdoc />
     public async Task SetListAsync(DiscoveryList list, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(list);
-
-        var filmsJson = JsonSerializer.Serialize(list.Films, JsonDefaults.Options);
-        var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-        await using (context.ConfigureAwait(false))
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            var entity = await context.DiscoveryLists
-                .FirstOrDefaultAsync(l => l.Id == list.Id, cancellationToken)
-                .ConfigureAwait(false);
-            if (entity is null)
-            {
-                entity = new CustomDiscoveryList { Id = list.Id, Title = list.Title, Source = list.Source, FilmsJson = filmsJson };
-                context.DiscoveryLists.Add(entity);
-            }
+            ArgumentNullException.ThrowIfNull(list);
 
-            entity.Title = list.Title;
-            entity.Source = list.Source;
-            entity.FilmsJson = filmsJson;
-            entity.DateModified = DateTime.UtcNow;
-            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            var filmsJson = JsonSerializer.Serialize(list.Films, JsonDefaults.Options);
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                var entity = await context.DiscoveryLists
+                    .FirstOrDefaultAsync(l => l.Id == list.Id, cancellationToken)
+                    .ConfigureAwait(false);
+                if (entity is null)
+                {
+                    entity = new CustomDiscoveryList { Id = list.Id, Title = list.Title, Source = list.Source, FilmsJson = filmsJson };
+                    context.DiscoveryLists.Add(entity);
+                }
+                else
+                {
+                    entity.Title = list.Title;
+                    entity.Source = list.Source;
+                    entity.FilmsJson = filmsJson;
+                }
+
+                entity.DateModified = DateTime.UtcNow;
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
         }
     }
 
     /// <inheritdoc />
     public async Task<bool> RemoveListAsync(string id, CancellationToken cancellationToken)
     {
-        var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-        await using (context.ConfigureAwait(false))
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            var removed = await context.DiscoveryLists
-                .Where(l => l.Id == id)
-                .ExecuteDeleteAsync(cancellationToken)
-                .ConfigureAwait(false);
-            return removed > 0;
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                var removed = await context.DiscoveryLists
+                    .Where(l => l.Id == id)
+                    .ExecuteDeleteAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                return removed > 0;
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
         }
     }
 
     /// <inheritdoc />
     public async Task MarkShownAsync(IEnumerable<int> tmdbIds, DateOnly day, CancellationToken cancellationToken)
     {
-        ArgumentNullException.ThrowIfNull(tmdbIds);
-
-        var ids = tmdbIds.Distinct().ToList();
-        if (ids.Count == 0)
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
         {
-            return;
-        }
+            ArgumentNullException.ThrowIfNull(tmdbIds);
 
-        var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
-        await using (context.ConfigureAwait(false))
-        {
-            var existing = (await context.DiscoveryShown
-                .Where(s => ids.Contains(s.TmdbId))
-                .ToListAsync(cancellationToken)
-                .ConfigureAwait(false))
-                .ToDictionary(s => s.TmdbId);
-
-            foreach (var id in ids)
+            var ids = tmdbIds.Distinct().ToList();
+            if (ids.Count == 0)
             {
-                if (existing.TryGetValue(id, out var row))
-                {
-                    row.LastShown = day;
-                }
-                else
-                {
-                    context.DiscoveryShown.Add(new CustomDiscoveryShown { TmdbId = id, FirstShown = day, LastShown = day });
-                }
+                return;
             }
 
-            await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                var existing = (await context.DiscoveryShown
+                    .Where(s => ids.Contains(s.TmdbId))
+                    .ToListAsync(cancellationToken)
+                    .ConfigureAwait(false))
+                    .ToDictionary(s => s.TmdbId);
+
+                foreach (var id in ids)
+                {
+                    if (existing.TryGetValue(id, out var row))
+                    {
+                        row.LastShown = day;
+                    }
+                    else
+                    {
+                        context.DiscoveryShown.Add(new CustomDiscoveryShown { TmdbId = id, FirstShown = day, LastShown = day });
+                    }
+                }
+
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
         }
     }
 
