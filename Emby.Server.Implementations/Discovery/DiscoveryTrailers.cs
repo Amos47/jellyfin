@@ -10,6 +10,7 @@ using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Globalization;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Logging;
 
 namespace Emby.Server.Implementations.Discovery;
@@ -90,6 +91,13 @@ public sealed class DiscoveryTrailers : IDiscoveryTrailers, IDisposable
         await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            // A list sync may have deleted the film since the first look.
+            film = _filmSync.FindFilm(tmdbId);
+            if (film is null)
+            {
+                return DiscoveryTrailerResult.FilmNotFound;
+            }
+
             var existing = _libraryManager.GetItemById(id);
             if (existing is not null && !IsDiscoveryTrailer(existing))
             {
@@ -110,14 +118,23 @@ public sealed class DiscoveryTrailers : IDiscoveryTrailers, IDisposable
             trailer.ParentId = Guid.Empty;
             CopyOwnerMetadata(film, trailer);
 
-            if (existing is null)
+            try
             {
-                _logger.LogInformation("Attaching discovery trailer {Path} to {Name} ({Id})", filePath, film.Name, film.Id);
-                _libraryManager.CreateItem(trailer, null);
+                if (existing is null)
+                {
+                    _logger.LogInformation("Attaching discovery trailer {Path} to {Name} ({Id})", filePath, film.Name, film.Id);
+                    _libraryManager.CreateItem(trailer, null);
+                }
+                else
+                {
+                    await trailer.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, cancellationToken).ConfigureAwait(false);
+                }
             }
-            else
+            catch (DbUpdateException ex) when (_filmSync.FindFilm(tmdbId) is null)
             {
-                await trailer.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, cancellationToken).ConfigureAwait(false);
+                // The sync deleted the film after the look above: the trailer's owner key no longer holds.
+                _logger.LogWarning(ex, "Discovery film for TMDB id {TmdbId} was removed while attaching {Path}", tmdbId, filePath);
+                return DiscoveryTrailerResult.FilmNotFound;
             }
         }
         finally

@@ -13,6 +13,7 @@ using MediaBrowser.Model.Entities;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
 
 namespace Jellyfin.Api.Controllers;
 
@@ -31,6 +32,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
     private readonly IDiscoveryTrailers _trailers;
     private readonly IDiscoveryUserPicks _picks;
     private readonly IUserManager _userManager;
+    private readonly ILogger<DiscoveryController> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DiscoveryController"/> class.
@@ -40,18 +42,21 @@ public partial class DiscoveryController : BaseJellyfinApiController
     /// <param name="trailers">Instance of the <see cref="IDiscoveryTrailers"/> interface.</param>
     /// <param name="picks">Instance of the <see cref="IDiscoveryUserPicks"/> interface.</param>
     /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
+    /// <param name="logger">Instance of the <see cref="ILogger{DiscoveryController}"/> interface.</param>
     public DiscoveryController(
         IDiscoveryStore store,
         IDiscoveryFilmSync filmSync,
         IDiscoveryTrailers trailers,
         IDiscoveryUserPicks picks,
-        IUserManager userManager)
+        IUserManager userManager,
+        ILogger<DiscoveryController> logger)
     {
         _store = store;
         _filmSync = filmSync;
         _trailers = trailers;
         _picks = picks;
         _userManager = userManager;
+        _logger = logger;
     }
 
     /// <summary>
@@ -71,7 +76,19 @@ public partial class DiscoveryController : BaseJellyfinApiController
         var seen = new HashSet<int>();
         foreach (var user in _userManager.GetUsers())
         {
-            foreach (var list in await _picks.GetPickedListsAsync(user, day, cancellationToken).ConfigureAwait(false))
+            IReadOnlyList<DiscoveryList> lists;
+            try
+            {
+                lists = await _picks.GetPickedListsAsync(user, day, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                // One user's broken layout must not hide everyone else's picks.
+                _logger.LogWarning(ex, "Skipping the discovery picks of user {UserId}: their home layout failed to load", user.Id);
+                continue;
+            }
+
+            foreach (var list in lists)
             {
                 tmdbIds.AddRange(list.Films.Select(f => f.TmdbId).Where(seen.Add));
             }
@@ -184,7 +201,9 @@ public partial class DiscoveryController : BaseJellyfinApiController
         }
 
         await _store.SetListAsync(new DiscoveryList(listId, list.Title, list.Source, films), cancellationToken).ConfigureAwait(false);
-        await _filmSync.SyncAsync(cancellationToken).ConfigureAwait(false);
+
+        // Not the request's token: once the list is saved, the films follow it even if the client hangs up.
+        await _filmSync.SyncAsync(CancellationToken.None).ConfigureAwait(false);
         return NoContent();
     }
 
@@ -213,7 +232,8 @@ public partial class DiscoveryController : BaseJellyfinApiController
             return NotFound();
         }
 
-        await _filmSync.SyncAsync(cancellationToken).ConfigureAwait(false);
+        // Not the request's token: once the list is removed, the films follow even if the client hangs up.
+        await _filmSync.SyncAsync(CancellationToken.None).ConfigureAwait(false);
         return NoContent();
     }
 

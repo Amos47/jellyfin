@@ -8,6 +8,7 @@ using MediaBrowser.Controller.Discovery;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
 using MediaBrowser.Model.Entities;
+using Microsoft.Extensions.Logging;
 
 namespace Emby.Server.Implementations.Discovery;
 
@@ -26,16 +27,19 @@ public sealed class WatchTrailerAction : IItemActionProvider
 
     private readonly IDiscoveryUserPicks _picks;
     private readonly IDiscoveryRowPlanner _planner;
+    private readonly ILogger<WatchTrailerAction> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="WatchTrailerAction"/> class.
     /// </summary>
     /// <param name="picks">The user's daily discovery picks.</param>
     /// <param name="planner">The discovery row planner.</param>
-    public WatchTrailerAction(IDiscoveryUserPicks picks, IDiscoveryRowPlanner planner)
+    /// <param name="logger">The logger.</param>
+    public WatchTrailerAction(IDiscoveryUserPicks picks, IDiscoveryRowPlanner planner, ILogger<WatchTrailerAction> logger)
     {
         _picks = picks;
         _planner = planner;
+        _logger = logger;
     }
 
     /// <inheritdoc />
@@ -61,7 +65,19 @@ public sealed class WatchTrailerAction : IItemActionProvider
 
         // The same day the Movie discovery rows use: the server's local date.
         var today = DateOnly.FromDateTime(DateTime.Now);
-        foreach (var list in await _picks.GetPickedListsAsync(user, today, cancellationToken).ConfigureAwait(false))
+        IReadOnlyList<DiscoveryList> lists;
+        try
+        {
+            lists = await _picks.GetPickedListsAsync(user, today, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            // The film's own trailers still play when the user's picks can't be worked out.
+            _logger.LogWarning(ex, "Could not get the discovery picks of user {UserId}; queueing only the trailers of {ItemId}", user.Id, item.Id);
+            return GetTrailerIds(user, item);
+        }
+
+        foreach (var list in lists)
         {
             // The row items are the films as the user sees them: owned or visible only.
             var films = _planner.GetRowItems(user, list);
