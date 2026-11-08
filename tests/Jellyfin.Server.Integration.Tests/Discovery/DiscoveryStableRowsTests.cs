@@ -139,10 +139,16 @@ public sealed class DiscoveryStableRowsTests : IClassFixture<JellyfinApplication
             Assert.Equal(before[replaced].Title, replacedNow.Title);
             Assert.Equal(FilmIds([2390, 2391, 2392]), replacedNow.Items.Select(i => i.Id).ToArray());
 
-            // The dropped list's id no longer names anything the server can serve.
-            using (var gone = await client.GetAsync($"HomeRows/{rowIds[removed]:D}/Items", Ct))
+            // The dropped list's row is still the parent's, so it answers 200 with no items (not an error).
+            var gone = await GetItemsAsync(client, rowIds[removed]);
+            Assert.Equal(rowIds[removed], gone.RowId);
+            Assert.Empty(gone.Items);
+            Assert.Equal(0, gone.TotalRecordCount);
+
+            // An id that is no row's, derived or not, is still unknown.
+            using (var unknown = await client.GetAsync($"HomeRows/{Guid.NewGuid():D}/Items", Ct))
             {
-                Assert.Equal(HttpStatusCode.NotFound, gone.StatusCode);
+                Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
             }
 
             var keptNow = await GetItemsAsync(client, rowIds[kept]);

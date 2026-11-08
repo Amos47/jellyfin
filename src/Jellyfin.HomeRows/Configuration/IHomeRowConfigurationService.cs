@@ -65,7 +65,8 @@ public interface IHomeRowConfigurationService
     /// Finds a row in the user's effective layout. The id may also be the derived id of a row an enabled
     /// <see cref="IExpandingHomeRowProvider"/> row expands into, for any key the provider can still serve
     /// (<see cref="IExpandingHomeRowProvider.GetResolvableSubRowKeysAsync"/>), not only today's; the parent row is then
-    /// returned with <see cref="EffectiveHomeRow.SubRowKey"/> set.
+    /// returned with <see cref="EffectiveHomeRow.SubRowKey"/> set. An id with the parent's derived-row prefix but no
+    /// such key (a deleted list) returns the parent with <see cref="HomeSubRow.UnknownKey"/>, so its items are empty.
     /// </summary>
     /// <param name="user">The user.</param>
     /// <param name="rowId">The row id.</param>

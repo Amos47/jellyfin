@@ -108,6 +108,11 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
             var lists = await _planner.GetPickedListsAsync(context.User, GetMaxRows(config), day, cancellationToken).ConfigureAwait(false);
             list = lists.Count > 0 ? lists[0] : null;
         }
+        else if (context.SubRowKey.Length == 0)
+        {
+            // HomeSubRow.UnknownKey (empty, never a list id): a derived row whose list is gone.
+            list = null;
+        }
         else
         {
             // A derived row: the list it names, whether or not it is picked today.

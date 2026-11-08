@@ -209,6 +209,18 @@ public class MovieDiscoveryProviderTests
     }
 
     [Fact]
+    public async Task Items_UnknownKeySentinel_EmptyWithoutStoreLookup()
+    {
+        var provider = CreateProvider(List("a", 1));
+
+        var result = await provider.GetItemsAsync(Context(HomeSubRow.UnknownKey), new JsonObject(), new HomeRowPaging(0, 20), Ct);
+
+        Assert.Empty(result.Items);
+        Assert.Equal(0, result.TotalRecordCount);
+        _store.Verify(s => s.GetListAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task Items_UnknownKey_Empty()
     {
         var provider = CreateProvider(List("a", 1));

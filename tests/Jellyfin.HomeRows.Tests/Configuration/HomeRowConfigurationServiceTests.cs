@@ -601,17 +601,21 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     }
 
     [Fact]
-    public void DerivedRowId_IsMd5OfParentBytesAndUtf8Key()
+    public void DerivedRowId_IsParentPrefixPlusKeyHash()
     {
         var parent = Guid.Parse("0f8fad5b-d9cb-469f-a165-70867728950e");
         var other = Guid.Parse("7c9e6679-7425-40de-944b-e07fc1f90ae7");
-        var bytes = parent.ToByteArray().Concat(System.Text.Encoding.UTF8.GetBytes("romance-new")).ToArray();
         // Not security related: the expected value of the id derivation.
 #pragma warning disable CA5351
-        var expected = new Guid(System.Security.Cryptography.MD5.HashData(bytes));
+        var prefix = System.Security.Cryptography.MD5.HashData(parent.ToByteArray().Concat(System.Text.Encoding.UTF8.GetBytes("derived-row")).ToArray());
+        var keyHash = System.Security.Cryptography.MD5.HashData(parent.ToByteArray().Concat(System.Text.Encoding.UTF8.GetBytes("romance-new")).ToArray());
 #pragma warning restore CA5351
+        var expected = new Guid(prefix.Take(4).Concat(keyHash.Skip(4)).ToArray());
 
         Assert.Equal(expected, HomeRowConfigurationService.GetDerivedRowId(parent, "romance-new"));
+        Assert.True(HomeRowConfigurationService.HasDerivedRowPrefix(parent, HomeRowConfigurationService.GetDerivedRowId(parent, "pixar")));
+        Assert.False(HomeRowConfigurationService.HasDerivedRowPrefix(other, HomeRowConfigurationService.GetDerivedRowId(parent, "pixar")));
+        Assert.False(HomeRowConfigurationService.HasDerivedRowPrefix(parent, parent));
         Assert.Equal(HomeRowConfigurationService.GetDerivedRowId(parent, "romance-new"), HomeRowConfigurationService.GetDerivedRowId(parent, "romance-new"));
         Assert.NotEqual(HomeRowConfigurationService.GetDerivedRowId(parent, "romance-new"), HomeRowConfigurationService.GetDerivedRowId(parent, "pixar"));
         Assert.NotEqual(HomeRowConfigurationService.GetDerivedRowId(parent, "romance-new"), HomeRowConfigurationService.GetDerivedRowId(other, "romance-new"));
@@ -727,13 +731,35 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
         Assert.Equal(parent.Id, found.Row.Id);
         Assert.Equal("romance-new", found.SubRowKey);
 
-        // Deleted from the store: no longer resolvable, so the id is unknown.
+        // Deleted from the store: the id still carries the parent's prefix, so it is the parent with the unknown key.
         _expanding.ExtraResolvable = [];
-        Assert.Null(await service.FindRowAsync(_user, romance, Ct));
+        var gone = await service.FindRowAsync(_user, romance, Ct);
+        Assert.NotNull(gone);
+        Assert.Equal(parent.Id, gone.Row.Id);
+        Assert.Equal(HomeSubRow.UnknownKey, gone.SubRowKey);
     }
 
     [Fact]
-    public async Task FindRow_ResolvableKeysFail_DerivedIdUnknown_ParentStillFound()
+    public async Task FindRow_IdWithoutParentPrefix_ReturnsNull()
+    {
+        var service = CreateService();
+        var parent = Row(Expanding);
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
+        _expanding.Keys = ["a"];
+
+        // A random id, and an index-based id from before keys (MD5 of the parent bytes and the int 0).
+        var bytes = parent.Id.ToByteArray().Concat(BitConverter.GetBytes(0)).ToArray();
+#pragma warning disable CA5351
+        var oldIndexId = new Guid(System.Security.Cryptography.MD5.HashData(bytes));
+#pragma warning restore CA5351
+
+        Assert.Null(await service.FindRowAsync(_user, Guid.NewGuid(), Ct));
+        Assert.Null(await service.FindRowAsync(_user, oldIndexId, Ct));
+        Assert.Equal(0, _expanding.ResolvableCalls);
+    }
+
+    [Fact]
+    public async Task FindRow_ResolvableKeysFail_DerivedIdIsUnknownKey_ParentStillFound()
     {
         var service = CreateService();
         var parent = Row(Expanding);
@@ -741,7 +767,9 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
         _expanding.Keys = ["a"];
         _expanding.FailResolvable = true;
 
-        Assert.Null(await service.FindRowAsync(_user, HomeRowConfigurationService.GetDerivedRowId(parent.Id, "a"), Ct));
+        var found = await service.FindRowAsync(_user, HomeRowConfigurationService.GetDerivedRowId(parent.Id, "a"), Ct);
+        Assert.NotNull(found);
+        Assert.Equal(HomeSubRow.UnknownKey, found.SubRowKey);
         Assert.NotNull(await service.FindRowAsync(_user, parent.Id, Ct));
     }
 
@@ -793,15 +821,15 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task Save_DerivedIdOfResolvableKeyNotPickedToday_IsRejected()
+    public async Task Save_IdWithExpandingParentPrefix_IsRejected()
     {
         var service = CreateService();
         var parent = Row(Expanding);
         Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
         _expanding.Keys = [];
-        _expanding.ExtraResolvable = ["retired"];
 
-        var errors = await service.SaveUserLayoutAsync(_user, [parent, Row(HomeRowProviderIds.NextUp) with { Id = HomeRowConfigurationService.GetDerivedRowId(parent.Id, "retired") }], Ct);
+        // Any key, even one the provider never had: the parent's prefix is enough.
+        var errors = await service.SaveUserLayoutAsync(_user, [parent, Row(HomeRowProviderIds.NextUp) with { Id = HomeRowConfigurationService.GetDerivedRowId(parent.Id, "never-a-list") }], Ct);
 
         var error = Assert.Single(errors);
         Assert.Equal(1, error.RowIndex);
@@ -937,6 +965,8 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
 
         public bool FailResolvable { get; set; }
 
+        public int ResolvableCalls { get; private set; }
+
         public bool IgnoreMaxRows { get; set; }
 
         public int CountCalls { get; private set; }
@@ -971,6 +1001,7 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
 
         public Task<IReadOnlyList<string>> GetResolvableSubRowKeysAsync(HomeRowContext context, JsonObject config, CancellationToken ct)
         {
+            ResolvableCalls++;
             if (Fail || FailResolvable)
             {
                 throw new InvalidOperationException("The lists are unavailable.");

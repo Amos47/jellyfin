@@ -14,7 +14,8 @@ namespace Jellyfin.HomeRows;
 /// <remarks>
 /// A derived id names its content, not its position: a client that keeps a row's title and refetches its items by id
 /// later gets the same sub-row, even after the provider's sub-rows have changed, as long as the key is still in
-/// <see cref="GetResolvableSubRowKeysAsync"/>.
+/// <see cref="GetResolvableSubRowKeysAsync"/>. A derived id whose key is gone is asked for with
+/// <see cref="HomeSubRow.UnknownKey"/>, or any other key the provider can't serve, and must get an empty result.
 /// </remarks>
 public interface IExpandingHomeRowProvider : IHomeRowProvider
 {
