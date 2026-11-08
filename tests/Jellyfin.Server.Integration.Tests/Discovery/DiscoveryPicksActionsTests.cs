@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -14,7 +15,9 @@ using Jellyfin.HomeRows;
 using Jellyfin.HomeRows.Configuration;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.Discovery;
+using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -43,6 +46,8 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
     private IUserManager UserManager => _factory.Services.GetRequiredService<IUserManager>();
 
     private IHomeRowConfigurationService Layouts => _factory.Services.GetRequiredService<IHomeRowConfigurationService>();
+
+    private ILibraryManager LibraryManager => _factory.Services.GetRequiredService<ILibraryManager>();
 
     private IDiscoveryRowPlanner Planner => _factory.Services.GetRequiredService<IDiscoveryRowPlanner>();
 
@@ -258,6 +263,154 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
     }
 
     [Fact]
+    public async Task Actions_OwnedFilmWithoutTrailer_UsesDiscoveryCopyTrailer()
+    {
+        var client = await SetUpAsync();
+        var admin = await GetAdminAsync(client);
+        await Layouts.ResetUserLayoutAsync(admin, Ct);
+        var owned = await SetOwnedTmdbAsync(1171);
+        try
+        {
+            await PutListAsync(client, "ow-1", 1171);
+            var copyTrailer = await SetTrailerAsync(client, 1171, "owned-1171");
+
+            var actions = await GetAsync<JsonArray>(client, $"Items/{owned.Id:N}/Actions");
+            var queue = await GetQueueAsync(client, owned.Id);
+
+            var action = Assert.Single(actions)!;
+            Assert.Equal("watch-trailer", (string?)action["Id"]);
+            Assert.Equal("Watch trailer", (string?)action["Label"]);
+            Assert.Equal(new[] { copyTrailer }, queue);
+        }
+        finally
+        {
+            await DeleteListsAsync(client, "ow-1");
+            await SetOwnedTmdbAsync(null);
+        }
+    }
+
+    [Fact]
+    public async Task Actions_OwnedFilmWithOnlyImdbId_UsesDiscoveryCopyTrailer()
+    {
+        var client = await SetUpAsync();
+        var admin = await GetAdminAsync(client);
+        await Layouts.ResetUserLayoutAsync(admin, Ct);
+        // The owned film has no TMDB id, only an IMDb id; its discovery copy has both.
+        var owned = await SetOwnedImdbAsync("tt9001176");
+        try
+        {
+            using (var put = await client.PutAsJsonAsync(
+                "Discovery/Lists/ow-imdb",
+                new { Title = "ow-imdb", Source = "tests", Films = new[] { new { TmdbId = 1176, ImdbId = "tt9001176" } } },
+                JsonDefaults.Options,
+                Ct))
+            {
+                Assert.Equal(HttpStatusCode.NoContent, put.StatusCode);
+            }
+
+            var copyTrailer = await SetTrailerAsync(client, 1176, "owned-imdb-1176");
+
+            var actions = await GetAsync<JsonArray>(client, $"Items/{owned.Id:N}/Actions");
+            var queue = await GetQueueAsync(client, owned.Id);
+
+            var action = Assert.Single(actions)!;
+            Assert.Equal("watch-trailer", (string?)action["Id"]);
+            Assert.Equal(new[] { copyTrailer }, queue);
+        }
+        finally
+        {
+            await DeleteListsAsync(client, "ow-imdb");
+            await SetOwnedImdbAsync(null);
+        }
+    }
+
+    [Fact]
+    public async Task Actions_OwnedFilmWithOwnTrailer_PrefersOwn()
+    {
+        var client = await SetUpAsync();
+        var admin = await GetAdminAsync(client);
+        await Layouts.ResetUserLayoutAsync(admin, Ct);
+        var owned = await SetOwnedTmdbAsync(1172);
+        var ownTrailer = AddOwnTrailer(owned);
+        try
+        {
+            await PutListAsync(client, "ow-2", 1172);
+            var copyTrailer = await SetTrailerAsync(client, 1172, "owned-1172");
+
+            var actions = await GetAsync<JsonArray>(client, $"Items/{owned.Id:N}/Actions");
+            var queue = await GetQueueAsync(client, owned.Id);
+
+            Assert.Equal("watch-trailer", (string?)Assert.Single(actions)!["Id"]);
+            Assert.Equal(new[] { ownTrailer.Id }, queue);
+            Assert.DoesNotContain(copyTrailer, queue);
+        }
+        finally
+        {
+            LibraryManager.DeleteItem(ownTrailer, new DeleteOptions { DeleteFileLocation = false });
+            await DeleteListsAsync(client, "ow-2");
+            await SetOwnedTmdbAsync(null);
+        }
+    }
+
+    [Fact]
+    public async Task Queue_OwnedFilmInRow_UsesDiscoveryCopyTrailer()
+    {
+        var client = await SetUpAsync();
+        var admin = await GetAdminAsync(client);
+        var owned = await SetOwnedTmdbAsync(1182);
+        try
+        {
+            // A discovery film, the owned film (no trailer of its own), another discovery film.
+            await PutListAsync(client, "ow-3", 1181, 1182, 1183);
+            var first = await SetTrailerAsync(client, 1181, "owned-row-1181");
+            var copy = await SetTrailerAsync(client, 1182, "owned-row-1182");
+            var last = await SetTrailerAsync(client, 1183, "owned-row-1183");
+            await SaveLayoutAsync(admin, maxRows: 10, enabled: true);
+            Assert.Contains(
+                (await Planner.GetPickedListsAsync(admin, 10, DateOnly.FromDateTime(DateTime.Now), Ct)).SelectMany(l => Planner.GetRowItems(admin, l)),
+                i => i.Item.Id.Equals(owned.Id));
+
+            var fromFirst = await GetQueueAsync(client, Sync.FindFilm(1181)!.Id);
+            var fromOwned = await GetQueueAsync(client, owned.Id);
+
+            Assert.Equal(new[] { first, copy, last }, fromFirst);
+            Assert.Equal(new[] { copy, last }, fromOwned);
+        }
+        finally
+        {
+            await Layouts.ResetUserLayoutAsync(admin, Ct);
+            await DeleteListsAsync(client, "ow-3");
+            await SetOwnedTmdbAsync(null);
+        }
+    }
+
+    [Fact]
+    public async Task LocalTrailers_OwnedFilm_Unchanged()
+    {
+        var client = await SetUpAsync();
+        var admin = await GetAdminAsync(client);
+        var owned = await SetOwnedTmdbAsync(1191);
+        try
+        {
+            await PutListAsync(client, "ow-4", 1191);
+            await SetTrailerAsync(client, 1191, "owned-1191");
+
+            // The upstream endpoints report the owned film's own trailers only: the copy's trailer is the action's.
+            var trailers = await GetAsync<JsonArray>(client, $"Items/{owned.Id:N}/LocalTrailers?userId={admin.Id:N}");
+            var dto = await GetAsync<JsonObject>(client, $"Items/{owned.Id:N}?userId={admin.Id:N}");
+
+            Assert.Empty(trailers);
+            Assert.Equal(0, (int?)dto["LocalTrailerCount"] ?? 0);
+            Assert.Single(await GetAsync<JsonArray>(client, $"Items/{owned.Id:N}/Actions"));
+        }
+        finally
+        {
+            await DeleteListsAsync(client, "ow-4");
+            await SetOwnedTmdbAsync(null);
+        }
+    }
+
+    [Fact]
     public async Task Picks_NonAdmin_Forbidden()
     {
         var client = await SetUpAsync();
@@ -294,6 +447,58 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
 
         var film = Sync.FindFilm(tmdbId)!;
         return Assert.Single(film.GetExtras([MediaBrowser.Model.Entities.ExtraType.Trailer])).Id;
+    }
+
+    // The seeded library film, given (or cleared of) a TMDB id so that a list can name it.
+    private async Task<BaseItem> SetOwnedTmdbAsync(int? tmdbId)
+    {
+        var seed = await DiscoverySeed.EnsureAsync(_factory);
+        var film = LibraryManager.GetItemById(seed.RealFilm.Id)!;
+        if (tmdbId is { } id)
+        {
+            film.SetProviderId(MetadataProvider.Tmdb, id.ToString(CultureInfo.InvariantCulture));
+        }
+        else
+        {
+            film.ProviderIds.Remove(MetadataProvider.Tmdb.ToString());
+        }
+
+        await film.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, CancellationToken.None);
+        return film;
+    }
+
+    // The seeded library film, given (or cleared of) an IMDb id, with no TMDB id.
+    private async Task<BaseItem> SetOwnedImdbAsync(string? imdbId)
+    {
+        var seed = await DiscoverySeed.EnsureAsync(_factory);
+        var film = LibraryManager.GetItemById(seed.RealFilm.Id)!;
+        film.ProviderIds.Remove(MetadataProvider.Tmdb.ToString());
+        if (imdbId is not null)
+        {
+            film.SetProviderId(MetadataProvider.Imdb, imdbId);
+        }
+        else
+        {
+            film.ProviderIds.Remove(MetadataProvider.Imdb.ToString());
+        }
+
+        await film.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, CancellationToken.None);
+        return film;
+    }
+
+    // A trailer extra of the library film itself, like a local "-trailer" file next to it.
+    private BaseItem AddOwnTrailer(BaseItem film)
+    {
+        var trailer = new Video
+        {
+            Name = film.Name + " Own Trailer",
+            Path = Path.Combine(_trailerRoot, "own-" + Guid.NewGuid().ToString("N")[..8] + "-trailer.mkv"),
+            OwnerId = film.Id,
+            ExtraType = ExtraType.Trailer,
+        };
+        trailer.Id = LibraryManager.GetNewItemId(trailer.Path, typeof(Video));
+        LibraryManager.CreateItem(trailer, null);
+        return trailer;
     }
 
     private async Task SaveLayoutAsync(User user, int maxRows, bool enabled)

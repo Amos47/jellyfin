@@ -45,7 +45,7 @@ public sealed class WatchTrailerActionTests : IDisposable
     {
         _picks.Setup(p => p.GetPickedListsAsync(_user, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("broken layout"));
-        var action = new WatchTrailerAction(_picks.Object, _planner.Object, NullLogger<WatchTrailerAction>.Instance);
+        var action = new WatchTrailerAction(_picks.Object, _planner.Object, Mock.Of<IDiscoveryFilmSync>(), NullLogger<WatchTrailerAction>.Instance);
 
         var queue = await action.GetQueueAsync(_user, new Movie { Id = Guid.NewGuid() }, Ct);
 
@@ -57,7 +57,7 @@ public sealed class WatchTrailerActionTests : IDisposable
     {
         _picks.Setup(p => p.GetPickedListsAsync(_user, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new OperationCanceledException());
-        var action = new WatchTrailerAction(_picks.Object, _planner.Object, NullLogger<WatchTrailerAction>.Instance);
+        var action = new WatchTrailerAction(_picks.Object, _planner.Object, Mock.Of<IDiscoveryFilmSync>(), NullLogger<WatchTrailerAction>.Instance);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => action.GetQueueAsync(_user, new Movie { Id = Guid.NewGuid() }, Ct));
     }

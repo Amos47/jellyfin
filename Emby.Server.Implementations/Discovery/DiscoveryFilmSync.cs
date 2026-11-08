@@ -114,6 +114,29 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
         => _libraryManager.GetItemById(GetFilmId(tmdbId)) as Movie;
 
     /// <inheritdoc />
+    public Movie? FindFilmByImdb(string imdbId)
+    {
+        var folderId = _folderLocator.FolderId;
+        if (string.IsNullOrEmpty(imdbId) || folderId.Equals(Guid.Empty))
+        {
+            return null;
+        }
+
+        var films = _libraryManager.GetItemList(new InternalItemsQuery
+        {
+            IncludeDiscovery = true,
+            ParentId = folderId,
+            IncludeItemTypes = [BaseItemKind.Movie],
+            HasAnyProviderId = new Dictionary<string, string> { [MetadataProvider.Imdb.ToString()] = imdbId },
+            Limit = 1,
+            DtoOptions = new DtoOptions(false),
+        });
+
+        // The light query's item lacks its extras: load the film in full.
+        return films.Count > 0 ? _libraryManager.GetItemById(films[0].Id) as Movie : null;
+    }
+
+    /// <inheritdoc />
     public BaseItem? FindOwned(User user, int tmdbId, string? imdbId)
     {
         ArgumentNullException.ThrowIfNull(user);

@@ -547,11 +547,17 @@ public sealed class DiscoveryContractTests : IClassFixture<JellyfinApplicationFa
             using var actions = await client.GetAsync($"Items/{aboveId:N}/Actions", Ct);
             using var queue = await client.GetAsync($"Items/{aboveId:N}/Actions/watch-trailer/Queue", Ct);
             using var adminActions = await admin.GetAsync($"Items/{aboveId:N}/Actions", Ct);
+            // An API key has no user: 404, as documented, not an exception.
+            using var keyClient = CreateApiKeyClient(contract);
+            using var keyActions = await keyClient.GetAsync($"Items/{aboveId:N}/Actions", Ct);
+            using var keyQueue = await keyClient.GetAsync($"Items/{aboveId:N}/Actions/watch-trailer/Queue", Ct);
             var fromAllowed = await GetAsync<JsonObject>(client, $"Items/{Sync.FindFilm(990201)!.Id:N}/Actions/watch-trailer/Queue");
 
             Assert.Equal(HttpStatusCode.NotFound, actions.StatusCode);
             Assert.Equal(HttpStatusCode.NotFound, queue.StatusCode);
             Assert.Equal(HttpStatusCode.OK, adminActions.StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, keyActions.StatusCode);
+            Assert.Equal(HttpStatusCode.NotFound, keyQueue.StatusCode);
             var queued = fromAllowed["ItemIds"]!.AsArray().Select(n => Guid.Parse((string)n!)).ToArray();
             Assert.Equal(new[] { allowed, later }, queued);
             Assert.DoesNotContain(above, queued);
