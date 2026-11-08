@@ -62,11 +62,25 @@ public interface IHomeRowConfigurationService
     Task ResetAdminDefaultAsync(CancellationToken ct);
 
     /// <summary>
-    /// Finds a row in the user's effective layout.
+    /// Finds a row in the user's effective layout. The id may also be the id of a row an enabled
+    /// <see cref="IExpandingHomeRowProvider"/> row expands into; the parent row is then returned with
+    /// <see cref="EffectiveHomeRow.SubRow"/> set.
     /// </summary>
     /// <param name="user">The user.</param>
     /// <param name="rowId">The row id.</param>
     /// <param name="ct">The cancellation token.</param>
     /// <returns>The row, or <c>null</c> if the user's effective layout has no such row.</returns>
     Task<EffectiveHomeRow?> FindRowAsync(User user, Guid rowId, CancellationToken ct);
+
+    /// <summary>
+    /// Turns a layout into its display view: each enabled row of an <see cref="IExpandingHomeRowProvider"/> becomes
+    /// as many rows as the provider says for the user (none removes it), with derived ids and the parent's provider,
+    /// title, config and enabled flag. Other rows are kept as they are. The result is for display only; saving it is
+    /// rejected.
+    /// </summary>
+    /// <param name="user">The user.</param>
+    /// <param name="layout">The effective layout.</param>
+    /// <param name="ct">The cancellation token.</param>
+    /// <returns>The expanded layout.</returns>
+    Task<EffectiveHomeRowLayout> ExpandAsync(User user, EffectiveHomeRowLayout layout, CancellationToken ct);
 }

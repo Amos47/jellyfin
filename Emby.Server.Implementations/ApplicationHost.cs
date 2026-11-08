@@ -601,6 +601,7 @@ namespace Emby.Server.Implementations
             serviceCollection.AddSingleton<IDiscoveryMetadataRefresher, DiscoveryMetadataRefresher>();
             serviceCollection.AddSingleton<IDiscoveryFilmSync, DiscoveryFilmSync>();
             serviceCollection.AddSingleton<IDiscoveryTrailers, DiscoveryTrailers>();
+            serviceCollection.AddSingleton<IDiscoveryRowPlanner, DiscoveryRowPlanner>();
             serviceCollection.AddSingleton<IRewatchCandidateFinder, RewatchCandidateFinder>();
             serviceCollection.AddSingleton<ITVSeriesManager, TVSeriesManager>();
 

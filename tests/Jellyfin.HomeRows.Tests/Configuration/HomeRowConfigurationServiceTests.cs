@@ -31,6 +31,7 @@ namespace Jellyfin.HomeRows.Tests.Configuration;
 public sealed class HomeRowConfigurationServiceTests : IDisposable
 {
     private const string Gone = "gone-provider";
+    private const string Expanding = "expanding";
 
     private readonly string _dbPath = Path.Combine(Path.GetTempPath(), $"homerows-{Guid.NewGuid():N}.db");
     private readonly string _jellyfinDbPath = Path.Combine(Path.GetTempPath(), $"homerows-jellyfin-{Guid.NewGuid():N}.db");
@@ -42,6 +43,7 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     private readonly User _admin = new("admin", "Default", "Default");
     private readonly Guid _movies = Guid.NewGuid();
     private readonly Guid _shows = Guid.NewGuid();
+    private readonly FakeExpandingProvider _expanding = new(Expanding);
 
     public HomeRowConfigurationServiceTests()
     {
@@ -542,6 +544,184 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
         Assert.Equal(CollectionType.folders, ((UserView)views[1]).ViewType);
     }
 
+    [Fact]
+    public async Task Expand_True_ThreeListsMaxTwo_TwoRowsWithDistinctStableIds()
+    {
+        var service = CreateService();
+        var parent = Row(Expanding, new JsonObject { ["maxRows"] = 2 });
+        var next = Row(HomeRowProviderIds.NextUp);
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent, next], Ct));
+        _expanding.Lists = 3;
+
+        var layout = await service.GetEffectiveLayoutAsync(_user, Ct);
+        var expanded = await service.ExpandAsync(_user, layout, Ct);
+        var again = await service.ExpandAsync(_user, await service.GetEffectiveLayoutAsync(_user, Ct), Ct);
+
+        Assert.Equal(2, layout.Rows.Count);
+        Assert.Equal(layout.Source, expanded.Source);
+        Assert.Equal(new[] { Expanding, Expanding, HomeRowProviderIds.NextUp }, expanded.Rows.Select(r => r.Row.Provider));
+        var derived = expanded.Rows.Take(2).ToArray();
+        Assert.False(derived[0].Row.Id.Equals(derived[1].Row.Id));
+        Assert.All(derived, d => Assert.False(d.Row.Id.Equals(parent.Id)));
+        Assert.Equal(new[] { 0, 1 }, derived.Select(d => d.SubRow));
+        Assert.Equal(derived.Select(d => d.Row.Id), again.Rows.Take(2).Select(r => r.Row.Id));
+        Assert.All(derived, d =>
+        {
+            Assert.True(d.Row.Enabled);
+            Assert.True(d.IsAvailable);
+            Assert.Equal(2, (int)d.Row.Config["maxRows"]!);
+        });
+        Assert.Equal(next.Id, expanded.Rows[2].Row.Id);
+
+        // The provider got the validated config, with the schema's defaults filled in.
+        Assert.Equal(2, (int)_expanding.LastConfig!["maxRows"]!);
+        Assert.Equal("poster", (string?)_expanding.LastConfig["cardStyle"]);
+    }
+
+    [Fact]
+    public void DerivedRowId_IsMd5OfParentBytesAndIndex()
+    {
+        var parent = Guid.Parse("0f8fad5b-d9cb-469f-a165-70867728950e");
+        var bytes = parent.ToByteArray().Concat(BitConverter.GetBytes(1)).ToArray();
+        var expected = new Guid(System.Security.Cryptography.MD5.HashData(bytes));
+
+        Assert.True(BitConverter.IsLittleEndian);
+        Assert.Equal(expected, HomeRowConfigurationService.GetDerivedRowId(parent, 1));
+        Assert.NotEqual(HomeRowConfigurationService.GetDerivedRowId(parent, 0), HomeRowConfigurationService.GetDerivedRowId(parent, 1));
+    }
+
+    [Fact]
+    public async Task Expand_NoLists_RowRemoved()
+    {
+        var service = CreateService();
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [Row(Expanding), Row(HomeRowProviderIds.NextUp)], Ct));
+        _expanding.Lists = 0;
+
+        var expanded = await service.ExpandAsync(_user, await service.GetEffectiveLayoutAsync(_user, Ct), Ct);
+
+        Assert.Equal(new[] { HomeRowProviderIds.NextUp }, expanded.Rows.Select(r => r.Row.Provider));
+    }
+
+    [Fact]
+    public async Task Expand_ProviderFails_RowRemoved()
+    {
+        var service = CreateService();
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [Row(Expanding), Row(HomeRowProviderIds.NextUp)], Ct));
+        _expanding.Fail = true;
+
+        var expanded = await service.ExpandAsync(_user, await service.GetEffectiveLayoutAsync(_user, Ct), Ct);
+
+        Assert.Equal(new[] { HomeRowProviderIds.NextUp }, expanded.Rows.Select(r => r.Row.Provider));
+    }
+
+    [Fact]
+    public async Task Expand_DisabledRow_KeptAsIs()
+    {
+        var service = CreateService();
+        var disabled = Row(Expanding) with { Enabled = false };
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [disabled], Ct));
+        _expanding.Lists = 3;
+
+        var expanded = await service.ExpandAsync(_user, await service.GetEffectiveLayoutAsync(_user, Ct), Ct);
+
+        var row = Assert.Single(expanded.Rows);
+        Assert.Equal(disabled.Id, row.Row.Id);
+        Assert.False(row.Row.Enabled);
+        Assert.Equal(0, _expanding.CountCalls);
+    }
+
+    [Fact]
+    public async Task Expand_CountAboveMaximum_Capped()
+    {
+        var service = CreateService();
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [Row(Expanding, new JsonObject { ["maxRows"] = 10 })], Ct));
+        _expanding.Lists = 1000;
+        _expanding.IgnoreMaxRows = true;
+
+        var expanded = await service.ExpandAsync(_user, await service.GetEffectiveLayoutAsync(_user, Ct), Ct);
+
+        Assert.Equal(HomeRowConfigurationService.MaxExpandedRows, expanded.Rows.Count);
+    }
+
+    [Fact]
+    public async Task FindRow_DerivedId_ReturnsParentWithSubRow()
+    {
+        var service = CreateService();
+        var parent = Row(Expanding);
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
+        _expanding.Lists = 3;
+        var expanded = await service.ExpandAsync(_user, await service.GetEffectiveLayoutAsync(_user, Ct), Ct);
+
+        var found = await service.FindRowAsync(_user, expanded.Rows[2].Row.Id, Ct);
+        var direct = await service.FindRowAsync(_user, parent.Id, Ct);
+
+        Assert.NotNull(found);
+        Assert.Equal(parent.Id, found.Row.Id);
+        Assert.Equal(2, found.SubRow);
+        Assert.NotNull(direct);
+        Assert.Equal(0, direct.SubRow);
+        Assert.Null(await service.FindRowAsync(_other, expanded.Rows[2].Row.Id, Ct));
+    }
+
+    [Fact]
+    public async Task FindRow_DerivedIdOfDisabledRow_ReturnsNull()
+    {
+        var service = CreateService();
+        var parent = Row(Expanding) with { Enabled = false };
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
+
+        Assert.Null(await service.FindRowAsync(_user, HomeRowConfigurationService.GetDerivedRowId(parent.Id, 0), Ct));
+    }
+
+    [Fact]
+    public async Task Save_WithExpandedIds_IsRejected()
+    {
+        // Ruling: a save that echoes the expanded (display) layout is rejected, so it can't turn one discovery row into
+        // several. Clients edit the layout from GET Configuration without expand.
+        var service = CreateService();
+        var parent = Row(Expanding, new JsonObject { ["maxRows"] = 2 });
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [parent], Ct));
+        _expanding.Lists = 2;
+        var expanded = await service.ExpandAsync(_user, await service.GetEffectiveLayoutAsync(_user, Ct), Ct);
+
+        var errors = await service.SaveUserLayoutAsync(_user, expanded.Rows.Select(r => r.Row).ToArray(), Ct);
+        var mixed = await service.SaveUserLayoutAsync(_user, [parent, expanded.Rows[1].Row], Ct);
+
+        Assert.Equal(new[] { 0, 1 }, errors.Select(e => e.RowIndex));
+        Assert.All(errors, e => Assert.Equal("id", e.Key));
+        Assert.Equal(1, Assert.Single(mixed).RowIndex);
+        var stored = Assert.Single((await service.GetEffectiveLayoutAsync(_user, Ct)).Rows);
+        Assert.Equal(parent.Id, stored.Row.Id);
+    }
+
+    [Fact]
+    public async Task Save_AdminDefaultWithExpandedIds_IsRejected()
+    {
+        var service = CreateService();
+        var parent = Row(Expanding);
+        Assert.Empty(await service.SaveAdminDefaultAsync(_admin, [parent], Ct));
+
+        var errors = await service.SaveAdminDefaultAsync(_admin, [Row(Expanding) with { Id = HomeRowConfigurationService.GetDerivedRowId(parent.Id, 0) }], Ct);
+
+        Assert.Equal("id", Assert.Single(errors).Key);
+    }
+
+    [Fact]
+    public async Task DefaultLayout_HasNoMovieDiscovery()
+    {
+        var service = CreateService();
+        _expanding.Lists = 3;
+
+        var standard = await service.ExpandAsync(_user, await service.GetEffectiveLayoutAsync(_user, Ct), Ct);
+        AddSections(_other.Id, "emby", Enum.GetValues<HomeSectionType>().Select((t, i) => Section(i + 1, i, t)).ToArray());
+        var upstream = await service.ExpandAsync(_other, await service.GetEffectiveLayoutAsync(_other, Ct), Ct);
+
+        Assert.Equal(HomeRowLayoutSource.StandardDefault, standard.Source);
+        Assert.Equal(HomeRowLayoutSource.UpstreamSections, upstream.Source);
+        Assert.DoesNotContain(standard.Rows, r => r.Row.Provider == Expanding || r.Row.Provider == HomeRowProviderIds.MovieDiscovery);
+        Assert.DoesNotContain(upstream.Rows, r => r.Row.Provider == Expanding || r.Row.Provider == HomeRowProviderIds.MovieDiscovery);
+    }
+
     private static string Library(Guid id) => id.ToString("N");
 
     private static HomeRowInstance Row(string provider, JsonObject? config = null)
@@ -561,6 +741,7 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     {
         var providers = new List<IHomeRowProvider>
         {
+            _expanding,
             Provider(
                 HomeRowProviderIds.Resume,
                 new HomeRowSetting("limit", HomeRowSettingType.Integer, "Limit") { Default = 10, Minimum = 1, Maximum = 50 }),
@@ -619,6 +800,47 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     {
         await using var context = await _dbFactory.CreateDbContextAsync(Ct);
         Assert.Empty(await context.HomeRowConfigurations.ToListAsync(Ct));
+    }
+
+    private sealed class FakeExpandingProvider(string id) : IExpandingHomeRowProvider
+    {
+        public int Lists { get; set; }
+
+        public bool Fail { get; set; }
+
+        public bool IgnoreMaxRows { get; set; }
+
+        public int CountCalls { get; private set; }
+
+        public JsonObject? LastConfig { get; private set; }
+
+        public string Id => id;
+
+        public string Name => "Expanding";
+
+        public string Description => "Expands into one row per list.";
+
+        public Task<HomeRowSchema> GetSchemaAsync(HomeRowContext context, CancellationToken cancellationToken)
+            => Task.FromResult(new HomeRowSchema(
+            [
+                new HomeRowSetting("maxRows", HomeRowSettingType.Integer, "Rows") { Default = 3, Minimum = 1, Maximum = 10 },
+                new HomeRowSetting("cardStyle", HomeRowSettingType.String, "Card style") { Default = "poster" }
+            ]));
+
+        public Task<int> GetRowCountAsync(HomeRowContext context, JsonObject config, CancellationToken ct)
+        {
+            CountCalls++;
+            LastConfig = config;
+            if (Fail)
+            {
+                throw new InvalidOperationException("The lists are unavailable.");
+            }
+
+            return Task.FromResult(IgnoreMaxRows ? Lists : Math.Min(Lists, (int)config["maxRows"]!));
+        }
+
+        public Task<HomeRowResult> GetItemsAsync(HomeRowContext context, JsonObject config, HomeRowPaging paging, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 
     private sealed class TestDbFactory(DbContextOptions<CustomDbContext> options) : IDbContextFactory<CustomDbContext>

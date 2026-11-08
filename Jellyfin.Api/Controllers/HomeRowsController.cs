@@ -119,13 +119,18 @@ public class HomeRowsController : BaseJellyfinApiController
     /// <summary>
     /// Gets the home row layout of the current user, their own or inherited.
     /// </summary>
+    /// <param name="expand">Optional. Whether to return the display view, in which each row of an expanding provider
+    /// (Movie discovery) becomes the rows it shows today, with derived ids. Without it the layout is returned as
+    /// saved, for editing; the display view can't be saved back.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <response code="200">Layout returned.</response>
     /// <returns>The layout.</returns>
     [HttpGet("Configuration")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<HomeRowConfigurationDto>> GetConfiguration(CancellationToken cancellationToken)
+    public async Task<ActionResult<HomeRowConfigurationDto>> GetConfiguration(
+        [FromQuery] bool expand = false,
+        CancellationToken cancellationToken = default)
     {
         var user = GetUser();
         if (user is null)
@@ -133,7 +138,7 @@ public class HomeRowsController : BaseJellyfinApiController
             return NotFound();
         }
 
-        return Ok(await GetConfigurationDtoAsync(user, cancellationToken).ConfigureAwait(false));
+        return Ok(await GetConfigurationDtoAsync(user, expand, cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>
@@ -169,7 +174,7 @@ public class HomeRowsController : BaseJellyfinApiController
             return ToValidationProblem(errors);
         }
 
-        return Ok(await GetConfigurationDtoAsync(user, cancellationToken).ConfigureAwait(false));
+        return Ok(await GetConfigurationDtoAsync(user, false, cancellationToken).ConfigureAwait(false));
     }
 
     /// <summary>
@@ -252,7 +257,7 @@ public class HomeRowsController : BaseJellyfinApiController
         var row = effective.Row;
         var dtoOptions = new DtoOptions { Fields = fields }
             .AddAdditionalDtoOptions(enableImages, enableUserData, imageTypeLimit, enableImageTypes);
-        var context = new HomeRowContext(user, dtoOptions, DateTime.UtcNow);
+        var context = new HomeRowContext(user, dtoOptions, DateTime.UtcNow) { SubRow = effective.SubRow };
         try
         {
             var schema = await provider.GetSchemaAsync(context, cancellationToken).ConfigureAwait(false);
@@ -260,15 +265,20 @@ public class HomeRowsController : BaseJellyfinApiController
             var required = schema.Settings.Where(s => s.Default is null).Select(s => s.Key).ToHashSet(StringComparer.Ordinal);
             if (validation.Errors.Any(e => required.Contains(e.Key)))
             {
-                return Ok(new HomeRowItemsDto(row.Id, row.Title, [], null, startIndex, _fallbackPresentation, NeedsConfigurationError));
+                return Ok(new HomeRowItemsDto(rowId, row.Title, [], null, startIndex, _fallbackPresentation, NeedsConfigurationError));
             }
 
             var result = await provider
                 .GetItemsAsync(context, validation.Config, new HomeRowPaging(startIndex, limit), cancellationToken)
                 .ConfigureAwait(false);
+            // Each row of an expanding provider has a title of its own (Movie discovery: the list's), which a custom
+            // title would repeat on every row; there the custom title is only the fallback.
+            var title = provider is IExpandingHomeRowProvider ? result.Title ?? row.Title : row.Title ?? result.Title;
+
+            // The requested id: a derived id stays the id of the row the client asked for.
             return Ok(new HomeRowItemsDto(
-                row.Id,
-                row.Title ?? result.Title,
+                rowId,
+                title,
                 result.Items,
                 result.TotalRecordCount,
                 startIndex,
@@ -369,9 +379,14 @@ public class HomeRowsController : BaseJellyfinApiController
     private IReadOnlyList<HomeRowInstanceDto> ToDtos(IReadOnlyList<HomeRowInstance> rows)
         => rows.Select(r => ToDto(r, _providerFactory.Get(r.Provider) is not null)).ToArray();
 
-    private async Task<HomeRowConfigurationDto> GetConfigurationDtoAsync(User user, CancellationToken cancellationToken)
+    private async Task<HomeRowConfigurationDto> GetConfigurationDtoAsync(User user, bool expand, CancellationToken cancellationToken)
     {
         var layout = await _configurationService.GetEffectiveLayoutAsync(user, cancellationToken).ConfigureAwait(false);
+        if (expand)
+        {
+            layout = await _configurationService.ExpandAsync(user, layout, cancellationToken).ConfigureAwait(false);
+        }
+
         return new HomeRowConfigurationDto(
             ApiVersion,
             layout.Source,
