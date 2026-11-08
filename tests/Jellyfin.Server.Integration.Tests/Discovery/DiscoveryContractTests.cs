@@ -27,6 +27,7 @@ using MediaBrowser.Model.Dto;
 using MediaBrowser.Model.Entities;
 using MediaBrowser.Model.Globalization;
 using MediaBrowser.Model.Querying;
+using MediaBrowser.Model.Search;
 using Microsoft.Extensions.DependencyInjection;
 using Xunit;
 
@@ -190,20 +191,35 @@ public sealed class DiscoveryContractTests : IClassFixture<JellyfinApplicationFa
                 var persons = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Persons" + query);
                 var searchedPersons = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Persons" + query + "&searchTerm=Actor");
 
-                Check(genres, "/Genres", RealGenre, DiscoveryGenre);
-                Check(movieGenres, "/Genres?includeItemTypes=Movie", RealGenre, DiscoveryGenre);
-                Check(studios, "/Studios", RealStudio, DiscoveryStudio);
-                Check(persons, "/Persons", RealPerson, DiscoveryPerson);
-                Check(searchedPersons, "/Persons?searchTerm=Actor", RealPerson, DiscoveryPerson);
+                // The Person items themselves, through the generic item list and the search hints.
+                var personItems = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Items" + query + "&includeItemTypes=Person&recursive=true");
+                var searchedPersonItems = await GetAsync<QueryResult<BaseItemDto>>(variantClient, "Items" + query + "&includeItemTypes=Person&recursive=true&searchTerm=Actor");
+                var hints = await GetAsync<SearchHintResult>(variantClient, "Search/Hints" + query + "&searchTerm=Actor");
 
-                void Check(QueryResult<BaseItemDto> result, string list, string control, string hidden)
+                Check(genres.Items.Select(i => i.Name), "/Genres", RealGenre, DiscoveryGenre);
+                Check(movieGenres.Items.Select(i => i.Name), "/Genres?includeItemTypes=Movie", RealGenre, DiscoveryGenre);
+                Check(studios.Items.Select(i => i.Name), "/Studios", RealStudio, DiscoveryStudio);
+                Check(persons.Items.Select(i => i.Name), "/Persons", RealPerson, DiscoveryPerson);
+                Check(searchedPersons.Items.Select(i => i.Name), "/Persons?searchTerm=Actor", RealPerson, DiscoveryPerson);
+                Check(personItems.Items.Select(i => i.Name), "/Items?includeItemTypes=Person&recursive=true", RealPerson, DiscoveryPerson);
+
+                // Known gap, not fixed here (see final-fix-report.md): with an API key there is no user, so the search
+                // provider returns unguarded ids and the explicit-ids item query that loads them bypasses the guard.
+                if (variantClient != keyClient)
                 {
-                    if (!result.Items.Any(i => i.Name == control))
+                    Check(searchedPersonItems.Items.Select(i => i.Name), "/Items?includeItemTypes=Person&recursive=true&searchTerm=Actor", RealPerson, DiscoveryPerson);
+                    Check(hints.SearchHints.Select(h => h.Name), "/Search/Hints?searchTerm=Actor", RealPerson, DiscoveryPerson);
+                }
+
+                void Check(IEnumerable<string?> names, string list, string control, string hidden)
+                {
+                    var result = names.ToList();
+                    if (!result.Any(i => i == control))
                     {
                         failures.Add($"{where}: {list} is missing the control {control}");
                     }
 
-                    if (result.Items.Any(i => i.Name == hidden))
+                    if (result.Any(i => i == hidden))
                     {
                         failures.Add($"{where}: {list} leaks {hidden}");
                     }
@@ -249,6 +265,11 @@ public sealed class DiscoveryContractTests : IClassFixture<JellyfinApplicationFa
             Assert.Contains(persons.Items, p => p.Name == DiscoveryPerson);
             Assert.Contains(persons.Items, p => p.Name == RealPerson);
             Assert.Contains(keyPersons.Items, p => p.Name == DiscoveryPerson);
+
+            var keyPersonItems = await GetAsync<QueryResult<BaseItemDto>>(keyClient, "Items?includeItemTypes=Person&recursive=true");
+            var keyHints = await GetAsync<SearchHintResult>(keyClient, "Search/Hints?searchTerm=Actor");
+            Assert.Contains(keyPersonItems.Items, p => p.Name == DiscoveryPerson);
+            Assert.Contains(keyHints.SearchHints, h => h.Name == DiscoveryPerson);
         }
         finally
         {
@@ -258,6 +279,8 @@ public sealed class DiscoveryContractTests : IClassFixture<JellyfinApplicationFa
         // Back to discovery-only: hidden again.
         var after = await GetAsync<QueryResult<BaseItemDto>>(client, $"Persons?userId={contract.UserId:N}");
         Assert.DoesNotContain(after.Items, p => p.Name == DiscoveryPerson);
+        var afterItems = await GetAsync<QueryResult<BaseItemDto>>(keyClient, "Items?includeItemTypes=Person&recursive=true");
+        Assert.DoesNotContain(afterItems.Items, p => p.Name == DiscoveryPerson);
     }
 
     [Fact]
@@ -280,7 +303,8 @@ public sealed class DiscoveryContractTests : IClassFixture<JellyfinApplicationFa
         Assert.NotNull(person);
 
         // Mark every person refreshed so the task only sweeps: refreshing one would ask TMDB (no network in tests).
-        foreach (var item in LibraryManager.GetItemList(new InternalItemsQuery { IncludeItemTypes = [BaseItemKind.Person] }))
+        // IncludeDiscovery: the discovery-only person is left out of unflagged Person queries too.
+        foreach (var item in LibraryManager.GetItemList(new InternalItemsQuery { IncludeItemTypes = [BaseItemKind.Person], IncludeDiscovery = true }))
         {
             item.DateLastRefreshed = DateTime.UtcNow;
             await item.UpdateToRepositoryAsync(ItemUpdateType.MetadataImport, Ct);

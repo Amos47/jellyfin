@@ -11,7 +11,9 @@
 #   not-movies  only music, shows, channels or Live TV items, never a Movie or a Trailer
 #   other       not an item list (sessions, sign-in)
 #
-# Not in this list because they don't return BaseItemDto, but covered anyway: /Search/Hints, /Items/Counts
+# Not in this list because they don't return BaseItemDto, but covered anyway: /Search/Hints (DiscoveryGuardTests
+# for films; Genres_Studios_Persons_Exclude for people credited only on discovery films, which are left out with a
+# user token; with an API key a search still leaks them and the films' trailers, a known gap), /Items/Counts
 # (DiscoveryGuardTests), /Items/Filters, /Items/Filters2 (DiscoveryContractTests.Filters_And_Years_Exclude).
 
 GET /Albums/{itemId}/InstantMix  # not-movies: songs of an album's genres
@@ -27,7 +29,7 @@ GET /Channels/{channelId}/Items  # not-movies: channel items only
 GET /Genres  # hidden: Genres_Studios_Persons_Exclude
 GET /Genres/{genreName}  # by-name: its MovieCount leaves discovery films out (Genres_Studios_Persons_Exclude)
 GET /HomeRows/{rowId}/Items  # hidden: every provider but movie-discovery (OtherHomeRows_Exclude); movie-discovery rows show them by design (HomeRowsDiscoveryTests)
-GET /Items  # hidden: DiscoveryGuardTests (recursive, parentId of the folder, search), Collections_Exclude, Trailers_Excludes; explicit ids bypass the guard by ruling (Items_ByIds_ReturnsDiscovery)
+GET /Items  # hidden: DiscoveryGuardTests (recursive, parentId of the folder, search), Collections_Exclude, Trailers_Excludes; Person items credited only on discovery films are left out too, with or without a user and with a user's searchTerm (Genres_Studios_Persons_Exclude; shared cast stays, Persons_SharedCast_Listed); known gap: an API-key searchTerm loads unguarded search-provider ids by explicit ids, so it still lists them and the films' trailers; explicit ids bypass the guard by ruling (Items_ByIds_ReturnsDiscovery)
 GET /Items/Latest  # hidden: Latest_Excludes
 GET /Items/Root  # by-id: the user's root folder
 GET /Items/Suggestions  # hidden: Suggestions_Excludes

@@ -2,6 +2,7 @@
 
 using System;
 using System.Linq;
+using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.Entities;
 using Jellyfin.Extensions;
@@ -18,8 +19,8 @@ public sealed partial class BaseItemRepository
     private IDiscoveryFolderLocator? _discoveryFolderLocator;
 
     /// <summary>
-    /// Leaves out everything in the discovery folder (TopParentId is the folder) and the extras owned by such items,
-    /// unless <see cref="InternalItemsQuery.IncludeDiscovery"/> is set. A query for explicit
+    /// Leaves out everything in the discovery folder (TopParentId is the folder), the extras owned by such items and
+    /// the Person items credited only on such items, unless <see cref="InternalItemsQuery.IncludeDiscovery"/> is set. A query for explicit
     /// <see cref="InternalItemsQuery.ItemIds"/> is not guarded: clients refetch items they already hold by id (the TV
     /// player, the trailer queue). Nor is a query for the extras of explicit <see cref="InternalItemsQuery.OwnerIds"/>:
     /// the caller already holds the owner, so a discovery film's detail page gets its local trailers.
@@ -44,8 +45,20 @@ public sealed partial class BaseItemRepository
             return baseQuery;
         }
 
-        return baseQuery.Where(e => e.TopParentId != folderId
+        baseQuery = baseQuery.Where(e => e.TopParentId != folderId
             && (e.OwnerId == null || !context.BaseItems.Any(o => o.Id == e.OwnerId && o.TopParentId == folderId)));
+
+        // Person items carry no TopParentId: leave out the ones credited only on discovery items, by the same rule as
+        // the people listing (PeopleRepository, ExcludeDiscoveryOnlyPeople). Uncredited people stay listed.
+        var personType = _itemTypeLookup.BaseItemKindNames[BaseItemKind.Person];
+        var discoveryItemIds = context.BaseItems
+            .Where(i => i.TopParentId == folderId
+                || (i.OwnerId != null && context.BaseItems.Any(o => o.Id == i.OwnerId && o.TopParentId == folderId)))
+            .Select(i => i.Id);
+        return baseQuery.Where(e => e.Type != personType
+            || !context.Peoples.Any(p => p.Name == e.Name && context.PeopleBaseItemMap.Any(m => m.PeopleId == p.Id))
+            || context.Peoples.Any(p => p.Name == e.Name
+                && context.PeopleBaseItemMap.Any(m => m.PeopleId == p.Id && !discoveryItemIds.Contains(m.ItemId))));
     }
 
     /// <inheritdoc />
