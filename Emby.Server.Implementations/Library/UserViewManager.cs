@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using Emby.Server.Implementations.Discovery;
 using Jellyfin.Data;
 using Jellyfin.Data.Enums;
 using Jellyfin.Database.Implementations.Entities;
@@ -56,6 +57,12 @@ namespace Emby.Server.Implementations.Library
 
             foreach (var folder in folders)
             {
+                // Fork: discovery - the hidden folder of virtual films is never a library view
+                if (folder is DiscoveryFolder)
+                {
+                    continue;
+                }
+
                 var collectionFolder = folder as ICollectionFolder;
                 var folderViewType = collectionFolder?.CollectionType;
 

@@ -15,6 +15,7 @@ using BitFaster.Caching.Lru;
 using Emby.Naming.Common;
 using Emby.Naming.TV;
 using Emby.Naming.Video;
+using Emby.Server.Implementations.Discovery;
 using Emby.Server.Implementations.Library.Resolvers;
 using Emby.Server.Implementations.Playlists;
 using Emby.Server.Implementations.ScheduledTasks.Tasks;
@@ -91,6 +92,7 @@ namespace Emby.Server.Implementations.Library
         private readonly DotIgnoreIgnoreRule _dotIgnoreIgnoreRule;
         private readonly IMediaStreamRepository _mediaStreamRepository;
         private readonly Lazy<IExternalDataManager> _externalDataManagerFactory;
+        private readonly DiscoveryFolderLocator _discoveryFolderLocator; // Fork: discovery
 
         /// <summary>
         /// The _root folder sync lock.
@@ -135,6 +137,7 @@ namespace Emby.Server.Implementations.Library
         /// <param name="localization">The localization manager.</param>
         /// <param name="mediaStreamRepository">The media stream repository.</param>
         /// <param name="externalDataManagerFactory">The external data manager (lazy, to break the DI cycle through ChapterManager).</param>
+        /// <param name="discoveryFolderLocator">The discovery folder locator (fork).</param>
         public LibraryManager(
             IServerApplicationHost appHost,
             ILoggerFactory loggerFactory,
@@ -159,7 +162,8 @@ namespace Emby.Server.Implementations.Library
             DotIgnoreIgnoreRule dotIgnoreIgnoreRule,
             ILocalizationManager localization,
             IMediaStreamRepository mediaStreamRepository,
-            Lazy<IExternalDataManager> externalDataManagerFactory)
+            Lazy<IExternalDataManager> externalDataManagerFactory,
+            DiscoveryFolderLocator discoveryFolderLocator) // Fork: discovery
         {
             _appHost = appHost;
             _logger = loggerFactory.CreateLogger<LibraryManager>();
@@ -192,6 +196,7 @@ namespace Emby.Server.Implementations.Library
 
             _mediaStreamRepository = mediaStreamRepository;
             _externalDataManagerFactory = externalDataManagerFactory;
+            _discoveryFolderLocator = discoveryFolderLocator; // Fork: discovery
 
             RecordConfigurationValues(_configurationManager.Configuration);
         }
@@ -1146,6 +1151,8 @@ namespace Emby.Server.Implementations.Library
             rootFolder.AddVirtualChild(folder);
 
             RegisterItem(folder);
+
+            _discoveryFolderLocator.Register(rootFolder, this, _configurationManager.ApplicationPaths); // Fork: discovery
 
             return rootFolder;
         }

@@ -22,6 +22,7 @@ using Emby.Server.Implementations.Configuration;
 using Emby.Server.Implementations.Cryptography;
 using Emby.Server.Implementations.Data;
 using Emby.Server.Implementations.Devices;
+using Emby.Server.Implementations.Discovery;
 using Emby.Server.Implementations.Dto;
 using Emby.Server.Implementations.HttpServer.Security;
 using Emby.Server.Implementations.IO;
@@ -61,6 +62,7 @@ using MediaBrowser.Controller.Chapters;
 using MediaBrowser.Controller.ClientEvent;
 using MediaBrowser.Controller.Collections;
 using MediaBrowser.Controller.Configuration;
+using MediaBrowser.Controller.Discovery;
 using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
@@ -592,6 +594,8 @@ namespace Emby.Server.Implementations
 
             serviceCollection.AddSingleton<IImageProcessor, ImageProcessor>();
 
+            serviceCollection.AddSingleton<DiscoveryFolderLocator>();
+            serviceCollection.AddSingleton<IDiscoveryFolderLocator>(sp => sp.GetRequiredService<DiscoveryFolderLocator>());
             serviceCollection.AddSingleton<IRewatchMarkerStore, RewatchMarkerStore>();
             serviceCollection.AddSingleton<IRewatchCandidateFinder, RewatchCandidateFinder>();
             serviceCollection.AddSingleton<ITVSeriesManager, TVSeriesManager>();
