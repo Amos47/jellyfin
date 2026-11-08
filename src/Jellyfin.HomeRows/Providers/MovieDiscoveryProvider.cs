@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json.Nodes;
 using System.Threading;
@@ -12,7 +13,8 @@ namespace Jellyfin.HomeRows.Providers;
 
 /// <summary>
 /// Fork: Movie discovery. Expands into one row per discovery list picked for the user today, each titled with the
-/// list's title. Which lists and films are shown is decided by <see cref="IDiscoveryRowPlanner"/>.
+/// list's title. Which lists and films are shown is decided by <see cref="IDiscoveryRowPlanner"/>. A sub-row's key is
+/// its list id, so a derived row id always serves the same list, even after the day's picks change.
 /// </summary>
 public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
 {
@@ -31,7 +33,7 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
     /// Initializes a new instance of the <see cref="MovieDiscoveryProvider"/> class.
     /// </summary>
     /// <param name="planner">The discovery row planner.</param>
-    /// <param name="store">The discovery store, for the shown log.</param>
+    /// <param name="store">The discovery store, for the lists and the shown log.</param>
     /// <param name="adapter">The item adapter.</param>
     /// <param name="logger">The logger.</param>
     public MovieDiscoveryProvider(IDiscoveryRowPlanner planner, IDiscoveryStore store, IHomeRowItemAdapter adapter, ILogger<MovieDiscoveryProvider> logger)
@@ -70,13 +72,24 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
         ]));
 
     /// <inheritdoc />
-    public async Task<int> GetRowCountAsync(HomeRowContext context, JsonObject config, CancellationToken ct)
+    public async Task<IReadOnlyList<HomeSubRow>> GetSubRowsAsync(HomeRowContext context, JsonObject config, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(config);
 
         var lists = await _planner.GetPickedListsAsync(context.User, GetMaxRows(config), GetDay(context), ct).ConfigureAwait(false);
-        return lists.Count;
+        return lists.Select(l => new HomeSubRow(l.Id)).ToArray();
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> GetResolvableSubRowKeysAsync(HomeRowContext context, JsonObject config, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(config);
+
+        // Every stored list, picked today or not: a client may still hold a row from an earlier pick.
+        var lists = await _store.GetListsAsync(ct).ConfigureAwait(false);
+        return lists.Select(l => l.Id).ToArray();
     }
 
     /// <inheritdoc />
@@ -88,14 +101,30 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
 
         var presentation = CardStyleSetting.ToPresentation(config, DefaultCardStyle);
         var day = GetDay(context);
-        var lists = await _planner.GetPickedListsAsync(context.User, GetMaxRows(config), day, cancellationToken).ConfigureAwait(false);
-        if (context.SubRow < 0 || context.SubRow >= lists.Count)
+        DiscoveryList? list;
+        if (context.SubRowKey is null)
         {
-            // Today's pick has fewer lists than this row's index (the lists changed since the layout was fetched).
+            // The parent row's own id: today's first pick.
+            var lists = await _planner.GetPickedListsAsync(context.User, GetMaxRows(config), day, cancellationToken).ConfigureAwait(false);
+            list = lists.Count > 0 ? lists[0] : null;
+        }
+        else if (context.SubRowKey.Length == 0)
+        {
+            // HomeSubRow.UnknownKey (empty, never a list id): a derived row whose list is gone.
+            list = null;
+        }
+        else
+        {
+            // A derived row: the list it names, whether or not it is picked today.
+            list = await _store.GetListAsync(context.SubRowKey, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (list is null)
+        {
+            // Nothing picked today, or the list was deleted since the layout was fetched.
             return new HomeRowResult([], 0, presentation);
         }
 
-        var list = lists[context.SubRow];
         var items = _planner.GetRowItems(context.User, list);
         var page = items.Skip(paging.StartIndex).Take(paging.Limit).ToArray();
         if (page.Length > 0)

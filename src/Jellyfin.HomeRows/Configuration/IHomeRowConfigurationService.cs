@@ -62,9 +62,11 @@ public interface IHomeRowConfigurationService
     Task ResetAdminDefaultAsync(CancellationToken ct);
 
     /// <summary>
-    /// Finds a row in the user's effective layout. The id may also be the id of a row an enabled
-    /// <see cref="IExpandingHomeRowProvider"/> row expands into; the parent row is then returned with
-    /// <see cref="EffectiveHomeRow.SubRow"/> set.
+    /// Finds a row in the user's effective layout. The id may also be the derived id of a row an enabled
+    /// <see cref="IExpandingHomeRowProvider"/> row expands into, for any key the provider can still serve
+    /// (<see cref="IExpandingHomeRowProvider.GetResolvableSubRowKeysAsync"/>), not only today's; the parent row is then
+    /// returned with <see cref="EffectiveHomeRow.SubRowKey"/> set. An id with the parent's derived-row prefix but no
+    /// such key (a deleted list) returns the parent with <see cref="HomeSubRow.UnknownKey"/>, so its items are empty.
     /// </summary>
     /// <param name="user">The user.</param>
     /// <param name="rowId">The row id.</param>
@@ -74,9 +76,9 @@ public interface IHomeRowConfigurationService
 
     /// <summary>
     /// Turns a layout into its display view: each enabled row of an <see cref="IExpandingHomeRowProvider"/> becomes
-    /// as many rows as the provider says for the user (none removes it), with derived ids and the parent's provider,
-    /// title, config and enabled flag. Other rows are kept as they are. The result is for display only; saving it is
-    /// rejected.
+    /// one row per sub-row the provider gives for the user (none removes it), with an id derived from the parent id and
+    /// the sub-row's key, no title, and the parent's provider, config and enabled flag. Other rows are kept as they
+    /// are. The result is for display only; saving it is rejected.
     /// </summary>
     /// <param name="user">The user.</param>
     /// <param name="layout">The effective layout.</param>

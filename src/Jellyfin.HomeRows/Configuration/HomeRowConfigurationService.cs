@@ -1,8 +1,8 @@
 using System;
-using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Linq;
 using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -45,6 +45,8 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
     /// </summary>
     public const int MaxExpandedRows = 10;
 
+    private const string DerivedRowPrefixText = "derived-row";
+    private const int DerivedRowPrefixLength = 4;
     private const string UpstreamSettingsClient = "emby";
     private const string UpstreamSettingsId = "usersettings";
 
@@ -236,16 +238,16 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
             return row;
         }
 
-        // A derived id of an expanded row: the parent row, with the sub row it stands for.
-        foreach (var parent in layout.Rows.Where(IsExpanding))
+        // A derived id of an expanded row (it carries the parent's prefix): the parent row, with the key of the sub-row
+        // it names. Every key the provider can still serve matches, not only today's, so a client holding an older layout
+        // gets the same content. A key it can no longer serve (a deleted list) gets HomeSubRow.UnknownKey: an empty row.
+        // A provider that fails here throws (the request answers 500): an empty row would look like a deleted list.
+        var context = new HomeRowContext(user, new DtoOptions(), DateTime.UtcNow);
+        foreach (var parent in layout.Rows.Where(r => IsExpanding(r) && HasDerivedRowPrefix(r.Row.Id, rowId)))
         {
-            for (var i = 0; i < MaxExpandedRows; i++)
-            {
-                if (GetDerivedRowId(parent.Row.Id, i).Equals(rowId))
-                {
-                    return parent with { SubRow = i };
-                }
-            }
+            var keys = await GetResolvableSubRowKeysAsync(context, parent.Row, ct).ConfigureAwait(false);
+            var key = keys.FirstOrDefault(k => !string.IsNullOrEmpty(k) && GetDerivedRowId(parent.Row.Id, k).Equals(rowId));
+            return parent with { SubRowKey = key ?? HomeSubRow.UnknownKey };
         }
 
         return null;
@@ -268,24 +270,25 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
             }
 
             var provider = (IExpandingHomeRowProvider)_providerFactory.Get(row.Row.Provider)!;
-            int count;
+            IReadOnlyList<HomeSubRow> subRows;
             try
             {
                 var schema = await provider.GetSchemaAsync(context, ct).ConfigureAwait(false);
                 var config = HomeRowConfigValidator.Validate(schema, row.Row.Config).Config;
-                count = Math.Clamp(await provider.GetRowCountAsync(context, config, ct).ConfigureAwait(false), 0, MaxExpandedRows);
+                subRows = await provider.GetSubRowsAsync(context, config, ct).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
             {
                 // One failing provider must not break the layout: its row is left out.
                 _logger.LogError(ex, "Expanding home row {RowId} of provider {ProviderId} failed", row.Row.Id, row.Row.Provider);
-                count = 0;
+                subRows = [];
             }
 
-            for (var i = 0; i < count; i++)
+            // An empty key is HomeSubRow.UnknownKey, never a real sub-row.
+            foreach (var subRow in subRows.Where(r => !string.IsNullOrEmpty(r.Key)).DistinctBy(r => r.Key, StringComparer.Ordinal).Take(MaxExpandedRows))
             {
                 // Title = null: each derived row is named by its own list title from /Items, not the parent's custom title.
-                rows.Add(row with { Row = row.Row with { Id = GetDerivedRowId(row.Row.Id, i), Title = null }, SubRow = i });
+                rows.Add(row with { Row = row.Row with { Id = GetDerivedRowId(row.Row.Id, subRow.Key), Title = null }, SubRowKey = subRow.Key });
             }
         }
 
@@ -293,25 +296,73 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
     }
 
     /// <summary>
-    /// Gets the id of row <paramref name="index"/> of an expanded row: a GUID made of the MD5 of the 16 bytes of
-    /// <paramref name="parentId"/> (<see cref="Guid.ToByteArray()"/>) followed by <paramref name="index"/> as a
-    /// 32 bit little-endian integer.
+    /// Gets the id of the row of an expanded row with sub-row key <paramref name="key"/>, as the 16 bytes of a GUID
+    /// (<see cref="Guid.ToByteArray()"/> order): bytes 0 to 3 are the first 4 bytes of the MD5 of the 16 bytes of
+    /// <paramref name="parentId"/> followed by the UTF-8 bytes of <c>derived-row</c> (the parent's prefix, the same
+    /// for all its derived rows); bytes 4 to 15 are bytes 4 to 15 of the MD5 of the 16 bytes of
+    /// <paramref name="parentId"/> followed by the UTF-8 bytes of <paramref name="key"/>. The id names the sub-row's
+    /// content (Movie discovery: its list), not its position, so it is the same whatever else is shown that day; the
+    /// prefix tells that an id belongs to the parent even when its key is gone.
     /// </summary>
     /// <param name="parentId">The id of the layout row.</param>
-    /// <param name="index">The index of the derived row, from 0.</param>
+    /// <param name="key">The <see cref="HomeSubRow.Key"/> of the derived row.</param>
     /// <returns>The derived row id.</returns>
-    public static Guid GetDerivedRowId(Guid parentId, int index)
+    public static Guid GetDerivedRowId(Guid parentId, string key)
     {
-        Span<byte> bytes = stackalloc byte[20];
+        ArgumentNullException.ThrowIfNull(key);
+
+        Span<byte> id = stackalloc byte[16];
+        HashWithParent(parentId, key, id);
+        HashWithParent(parentId, DerivedRowPrefixText, stackalloc byte[16])[..DerivedRowPrefixLength].CopyTo(id);
+        return new Guid(id);
+    }
+
+    /// <summary>
+    /// Gets a new row id that carries no expanding row's derived-row prefix, so a saved row is never taken for an expanded one.
+    /// </summary>
+    /// <param name="expandingIds">The ids of the expanding rows.</param>
+    /// <param name="next">Draws a candidate id.</param>
+    /// <returns>The new row id.</returns>
+    public static Guid NewRowId(IEnumerable<Guid> expandingIds, Func<Guid> next)
+    {
+        ArgumentNullException.ThrowIfNull(next);
+        var parents = expandingIds.ToList();
+        Guid id;
+        do
+        {
+            id = next();
+        }
+        while (parents.Any(parentId => HasDerivedRowPrefix(parentId, id)));
+
+        return id;
+    }
+
+    /// <summary>
+    /// Gets whether an id carries the prefix of the rows derived from <paramref name="parentId"/>
+    /// (see <see cref="GetDerivedRowId"/>).
+    /// </summary>
+    /// <param name="parentId">The id of the layout row.</param>
+    /// <param name="rowId">The id to check.</param>
+    /// <returns>Whether <paramref name="rowId"/> looks like a row derived from <paramref name="parentId"/>.</returns>
+    public static bool HasDerivedRowPrefix(Guid parentId, Guid rowId)
+    {
+        Span<byte> id = stackalloc byte[16];
+        rowId.TryWriteBytes(id);
+        return HashWithParent(parentId, DerivedRowPrefixText, stackalloc byte[16])[..DerivedRowPrefixLength].SequenceEqual(id[..DerivedRowPrefixLength]);
+    }
+
+    // MD5 of the 16 parent id bytes followed by the UTF-8 text, written to and returned as hash.
+    private static Span<byte> HashWithParent(Guid parentId, string text, Span<byte> hash)
+    {
+        var bytes = new byte[16 + Encoding.UTF8.GetByteCount(text)];
         parentId.TryWriteBytes(bytes);
-        BinaryPrimitives.WriteInt32LittleEndian(bytes[16..], index);
-        Span<byte> hash = stackalloc byte[MD5.HashSizeInBytes];
+        Encoding.UTF8.GetBytes(text, bytes.AsSpan(16));
 
         // Not security related: MD5 only derives a stable row id, like upstream's GetMD5.
 #pragma warning disable CA5351
         MD5.HashData(bytes, hash);
 #pragma warning restore CA5351
-        return new Guid(hash);
+        return hash;
     }
 
     private static Task<CustomHomeRowDefault?> GetDefaultEntityAsync(CustomDbContext context, bool readOnly, CancellationToken ct)
@@ -377,6 +428,15 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         }
     }
 
+    // The keys an expanding row's provider can still serve, with the row's config validated against its schema.
+    private async Task<IReadOnlyList<string>> GetResolvableSubRowKeysAsync(HomeRowContext context, HomeRowInstance row, CancellationToken ct)
+    {
+        var provider = (IExpandingHomeRowProvider)_providerFactory.Get(row.Provider)!;
+        var schema = await provider.GetSchemaAsync(context, ct).ConfigureAwait(false);
+        var config = HomeRowConfigValidator.Validate(schema, row.Config).Config;
+        return await provider.GetResolvableSubRowKeysAsync(context, config, ct).ConfigureAwait(false);
+    }
+
     private bool IsExpanding(EffectiveHomeRow row)
         => row.Row.Enabled && row.IsAvailable && _providerFactory.Get(row.Row.Provider) is IExpandingHomeRowProvider;
 
@@ -402,19 +462,20 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         var ids = new HashSet<Guid>();
 
         // Ruling: the ids of expanded rows are rejected, so saving the display view can't multiply an expanding row.
-        var derivedIds = stored.Concat(rows)
-            .Where(r => _providerFactory.Get(r.Provider) is IExpandingHomeRowProvider)
-            .SelectMany(r => Enumerable.Range(0, MaxExpandedRows).Select(i => GetDerivedRowId(r.Id, i)))
+        // Any id with an expanding row's derived-row prefix counts, whatever its key.
+        var expandingIds = stored.Concat(rows)
+            .Where(r => !string.IsNullOrEmpty(r.Provider) && _providerFactory.Get(r.Provider) is IExpandingHomeRowProvider)
+            .Select(r => r.Id)
             .ToHashSet();
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
-            var id = row.Id.IsEmpty() ? Guid.NewGuid() : row.Id;
+            var id = row.Id.IsEmpty() ? NewRowId(expandingIds, Guid.NewGuid) : row.Id;
             if (!ids.Add(id))
             {
                 errors.Add(new HomeRowSaveError(i, "id", "The row id is used by another row."));
             }
-            else if (derivedIds.Contains(id))
+            else if (expandingIds.Any(parentId => HasDerivedRowPrefix(parentId, id)))
             {
                 errors.Add(new HomeRowSaveError(i, "id", "The row id is the id of an expanded row; save the layout from HomeRows/Configuration without expand."));
             }

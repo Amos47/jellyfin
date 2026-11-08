@@ -13,8 +13,9 @@ namespace Jellyfin.HomeRows;
 public sealed record HomeRowContext(User User, DtoOptions DtoOptions, DateTime UtcNow)
 {
     /// <summary>
-    /// Gets which of the rows an <see cref="IExpandingHomeRowProvider"/> row expanded into is asked for, from 0.
-    /// Always 0 for other providers.
+    /// Gets the key of the row an <see cref="IExpandingHomeRowProvider"/> row expanded into that is asked for
+    /// (<see cref="HomeSubRow.Key"/>), or <c>null</c> when the parent row itself is asked for. Always <c>null</c> for
+    /// other providers.
     /// </summary>
-    public int SubRow { get; init; }
+    public string? SubRowKey { get; init; }
 }
