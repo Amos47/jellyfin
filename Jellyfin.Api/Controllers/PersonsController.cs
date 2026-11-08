@@ -105,6 +105,7 @@ public class PersonsController : BaseJellyfinApiController
             excludePersonTypes)
         {
             AccessFilter = BuildAccessFilter(user),
+            ExcludeDiscoveryOnlyPeople = true, // Fork: discovery
             NameContains = searchTerm,
             NameStartsWith = nameStartsWith,
             NameLessThan = nameLessThan,

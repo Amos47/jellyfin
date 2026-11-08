@@ -72,5 +72,8 @@ namespace MediaBrowser.Controller.Entities
         /// describes the same people they can return.
         /// </summary>
         public bool MustHaveItem { get; set; }
+
+        /// <summary>Gets or sets a value indicating whether, without an access filter, to leave out people credited only on discovery items.</summary>
+        public bool ExcludeDiscoveryOnlyPeople { get; set; } // Fork: discovery
     }
 }

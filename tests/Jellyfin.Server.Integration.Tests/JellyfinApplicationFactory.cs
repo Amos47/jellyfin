@@ -8,6 +8,7 @@ using Jellyfin.Server.Helpers;
 using Jellyfin.Server.ServerSetupApp;
 using MediaBrowser.Common;
 using MediaBrowser.Common.Configuration;
+using MediaBrowser.Controller.Discovery; // Fork: discovery
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
@@ -119,6 +120,7 @@ namespace Jellyfin.Server.Integration.Tests
                 .ConfigureServices(e => e
                     .AddSingleton<IStartupLogger, NullStartupLogger<object>>()
                     .AddTransient(typeof(IStartupLogger<>), typeof(NullStartupLogger<>))
+                    .AddSingleton<IDiscoveryMetadataRefresher, NoOpDiscoveryMetadataRefresher>() // Fork: discovery, no TMDB calls in tests
                     .AddSingleton(e));
         }
 
@@ -151,6 +153,18 @@ namespace Jellyfin.Server.Integration.Tests
             _disposableComponents.Clear();
 
             base.Dispose(disposing);
+        }
+
+        // Fork: discovery - the test host's metadata refresher does nothing (no TMDB calls in tests)
+        private sealed class NoOpDiscoveryMetadataRefresher : IDiscoveryMetadataRefresher // Fork: discovery
+        {
+            public void QueueRefresh(Guid itemId) // Fork: discovery
+            {
+            }
+
+            public void QueueProbe(Guid itemId) // Fork: discovery
+            {
+            }
         }
 
         private sealed class NullStartupLogger<TCategory> : IStartupLogger<TCategory>

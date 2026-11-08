@@ -31,7 +31,7 @@ public sealed class PeopleRepositoryNameRangeTests : SqliteDbTestFixture
             context.SaveChanges();
         }
 
-        _repository = new PeopleRepository(CreateDbContextFactory(), new ItemTypeLookup(), new Mock<IItemQueryHelpers>().Object);
+        _repository = new PeopleRepository(CreateDbContextFactory(), new ItemTypeLookup(), QueryHelpersMock.Create()); // Fork: discovery
     }
 
     [Theory]

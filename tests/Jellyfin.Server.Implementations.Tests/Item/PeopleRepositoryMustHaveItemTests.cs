@@ -43,7 +43,7 @@ public sealed class PeopleRepositoryMustHaveItemTests : SqliteDbTestFixture
             context.SaveChanges();
         }
 
-        _people = new PeopleRepository(CreateDbContextFactory(), lookup, Mock.Of<IItemQueryHelpers>());
+        _people = new PeopleRepository(CreateDbContextFactory(), lookup, QueryHelpersMock.Create()); // Fork: discovery
         _people.UpdatePeople(_movie, [
             new PersonInfo { Name = "With Item", Type = PersonKind.Actor },
             new PersonInfo { Name = "Without Item", Type = PersonKind.Actor }

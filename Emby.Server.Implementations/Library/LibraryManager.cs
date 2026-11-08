@@ -1146,6 +1146,7 @@ namespace Emby.Server.Implementations.Library
             rootFolder.AddVirtualChild(folder);
 
             RegisterItem(folder);
+            _appHost.Resolve<Emby.Server.Implementations.Discovery.DiscoveryFolderLocator>()?.Register(rootFolder, this, _configurationManager.ApplicationPaths); // Fork: discovery
 
             return rootFolder;
         }

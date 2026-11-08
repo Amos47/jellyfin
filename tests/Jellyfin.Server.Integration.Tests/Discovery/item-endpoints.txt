@@ -1,0 +1,85 @@
+# Fork: discovery. Every API endpoint whose 200 response hands out BaseItemDto (directly, in a QueryResult or inside
+# another DTO), checked by DiscoveryContractTests.ItemEndpoints_Tripwire. When upstream adds one, the tripwire fails:
+# classify it here and, if it lists library items, add a hiding test.
+#
+# Format: METHOD /path  # class: note. Only the text before '#' is compared.
+# Classes:
+#   hidden      lists library items; discovery films and their trailers are left out (test named)
+#   by-id       the item asked for, or its own ancestors, extras, parts or by-id links; a discovery film resolves by
+#               design (detail pages, trailer queue, player refetch)
+#   by-name     one genre/studio/person/artist/year item by name; its counts use guarded queries
+#   not-movies  only music, shows, channels or Live TV items, never a Movie or a Trailer
+#   other       not an item list (sessions, sign-in)
+#
+# Not in this list because they don't return BaseItemDto, but covered anyway: /Search/Hints (DiscoveryGuardTests
+# for films; Genres_Studios_Persons_Exclude for people credited only on discovery films, which are left out with a
+# user token; with an API key a search still leaks them and the films' trailers, a known gap), /Items/Counts
+# (DiscoveryGuardTests), /Items/Filters, /Items/Filters2 (DiscoveryContractTests.Filters_And_Years_Exclude).
+
+GET /Albums/{itemId}/InstantMix  # not-movies: songs of an album's genres
+GET /Albums/{itemId}/Similar  # not-movies: similar albums
+GET /Artists  # not-movies: artists come from audio items only
+GET /Artists/AlbumArtists  # not-movies: album artists come from audio items only
+GET /Artists/{itemId}/InstantMix  # not-movies: songs
+GET /Artists/{itemId}/Similar  # not-movies: similar artists
+GET /Artists/{name}  # by-name
+GET /Channels  # not-movies: channel folders
+GET /Channels/Items/Latest  # not-movies: channel items only
+GET /Channels/{channelId}/Items  # not-movies: channel items only
+GET /Genres  # hidden: Genres_Studios_Persons_Exclude
+GET /Genres/{genreName}  # by-name: its MovieCount leaves discovery films out (Genres_Studios_Persons_Exclude)
+GET /HomeRows/{rowId}/Items  # hidden: every provider but movie-discovery (OtherHomeRows_Exclude); movie-discovery rows show them by design (HomeRowsDiscoveryTests)
+GET /Items  # hidden: DiscoveryGuardTests (recursive, parentId of the folder, search), Collections_Exclude, Trailers_Excludes; Person items credited only on discovery films are left out too, with or without a user and with a user's searchTerm (Genres_Studios_Persons_Exclude; shared cast stays, Persons_SharedCast_Listed); known gap: an API-key searchTerm loads unguarded search-provider ids by explicit ids, so it still lists them and the films' trailers; explicit ids bypass the guard by ruling (Items_ByIds_ReturnsDiscovery)
+GET /Items/Latest  # hidden: Latest_Excludes
+GET /Items/Root  # by-id: the user's root folder
+GET /Items/Suggestions  # hidden: Suggestions_Excludes
+GET /Items/{itemId}  # by-id: the discovery film's detail page
+GET /Items/{itemId}/Ancestors  # by-id: an item's own parents (a discovery film's are the hidden folder and the root)
+GET /Items/{itemId}/Collections  # by-id: the box sets holding the item; box sets never hold discovery films (Collections_Exclude)
+GET /Items/{itemId}/InstantMix  # not-movies: songs
+GET /Items/{itemId}/Intros  # by-id: intros come only from plugin intro providers (none built in); their library queries are guarded
+GET /Items/{itemId}/LocalTrailers  # by-id: the item's own trailers, by owner id (a discovery film's page shows its trailer by design)
+GET /Items/{itemId}/Similar  # hidden: Similar_Excludes
+GET /Items/{itemId}/SpecialFeatures  # by-id: the item's own extras, by owner id
+GET /Items/{itemId}/ThemeMedia  # by-id: the item's own theme extras
+GET /Items/{itemId}/ThemeSongs  # by-id: the item's own theme extras
+GET /Items/{itemId}/ThemeVideos  # by-id: the item's own theme extras
+GET /Library/MediaFolders  # other: admin only; lists the root's virtual children, so the empty discovery folder appears, flagged hidden (shown with no isHidden filter and with isHidden=true, not with isHidden=false); never its films (MediaFolders_ListsFolderOnlyAsHidden). Hiding it is not required.
+GET /LiveTv/Channels  # not-movies: Live TV
+GET /LiveTv/Channels/{channelId}  # not-movies: Live TV
+GET /LiveTv/Programs  # not-movies: Live TV
+GET /LiveTv/Programs/Recommended  # not-movies: Live TV
+GET /LiveTv/Programs/{programId}  # not-movies: Live TV
+GET /LiveTv/Recordings  # not-movies: recordings in the recording folders
+GET /LiveTv/Recordings/Folders  # not-movies: recording folders
+GET /LiveTv/Recordings/{recordingId}  # not-movies: Live TV
+GET /LiveTv/Timers  # not-movies: Live TV
+GET /LiveTv/Timers/{timerId}  # not-movies: Live TV
+GET /Movies/Recommendations  # hidden: Suggestions_Excludes
+GET /Movies/{itemId}/Similar  # hidden: Similar_Excludes
+GET /MusicGenres/InstantMix  # not-movies: songs
+GET /MusicGenres/{genreName}  # by-name
+GET /MusicGenres/{name}/InstantMix  # not-movies: songs
+GET /Persons  # hidden: people credited only on discovery films are left out, with or without an access filter (Genres_Studios_Persons_Exclude); shared cast stays (Persons_SharedCast_Listed)
+GET /Persons/{name}  # by-name
+GET /Playlists/{itemId}/InstantMix  # not-movies: songs
+GET /Playlists/{playlistId}/Items  # by-id: the playlist's own entries, which a user adds by id
+GET /Sessions  # other: a session's now-playing item (may be a discovery trailer from the Watch trailer queue, by design)
+GET /Shows/NextUp  # hidden: NextUp_Excludes
+GET /Shows/Upcoming  # not-movies: episodes
+GET /Shows/{itemId}/Similar  # hidden: same similar-items query as /Items/{itemId}/Similar (Similar_Excludes)
+GET /Shows/{seriesId}/Episodes  # not-movies: a series' episodes
+GET /Shows/{seriesId}/Seasons  # not-movies: a series' seasons
+GET /Songs/{itemId}/InstantMix  # not-movies: songs
+GET /Studios  # hidden: Genres_Studios_Persons_Exclude
+GET /Studios/{name}  # by-name
+GET /Trailers  # hidden: deprecated, forwards to GET /Items with includeItemTypes=Trailer, which Trailers_Excludes asks directly (it answers 500 in the test host)
+GET /Trailers/{itemId}/Similar  # hidden: Similar_Excludes
+GET /UserItems/Resume  # hidden: Resume_Excludes
+GET /UserViews  # hidden: the discovery folder is never a view, hidden views included (DiscoveryFolderTests.Folder_NotInUserViews, MediaFolders_ListsFolderOnlyAsHidden)
+GET /Videos/{itemId}/AdditionalParts  # by-id: the video's own parts
+GET /Years  # hidden: Filters_And_Years_Exclude
+GET /Years/{year}  # by-name
+POST /LiveTv/Programs  # not-movies: Live TV
+POST /Users/AuthenticateByName  # other: sign-in result (its session's now-playing item)
+POST /Users/AuthenticateWithQuickConnect  # other: sign-in result (its session's now-playing item)

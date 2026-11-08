@@ -17,6 +17,48 @@ namespace Jellyfin.Custom.Database.Migrations
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.11");
 
+            modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomDiscoveryList", b =>
+                {
+                    b.Property<string>("Id")
+                        .HasMaxLength(64)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("DateModified")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("FilmsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Source")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Title")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("CustomDiscoveryLists", (string)null);
+                });
+
+            modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomDiscoveryShown", b =>
+                {
+                    b.Property<int>("TmdbId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<DateOnly>("FirstShown")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("LastShown")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("TmdbId");
+
+                    b.ToTable("CustomDiscoveryShown", (string)null);
+                });
+
             modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomHomeRowConfiguration", b =>
                 {
                     b.Property<Guid>("UserId")

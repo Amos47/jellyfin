@@ -22,6 +22,7 @@ using Emby.Server.Implementations.Configuration;
 using Emby.Server.Implementations.Cryptography;
 using Emby.Server.Implementations.Data;
 using Emby.Server.Implementations.Devices;
+using Emby.Server.Implementations.Discovery; // Fork: discovery
 using Emby.Server.Implementations.Dto;
 using Emby.Server.Implementations.HttpServer.Security;
 using Emby.Server.Implementations.IO;
@@ -61,6 +62,7 @@ using MediaBrowser.Controller.Chapters;
 using MediaBrowser.Controller.ClientEvent;
 using MediaBrowser.Controller.Collections;
 using MediaBrowser.Controller.Configuration;
+using MediaBrowser.Controller.Discovery; // Fork: discovery
 using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
@@ -592,7 +594,15 @@ namespace Emby.Server.Implementations
 
             serviceCollection.AddSingleton<IImageProcessor, ImageProcessor>();
 
+            serviceCollection.AddSingleton<DiscoveryFolderLocator>(); // Fork: discovery
+            serviceCollection.AddSingleton<IDiscoveryFolderLocator>(sp => sp.GetRequiredService<DiscoveryFolderLocator>()); // Fork: discovery
             serviceCollection.AddSingleton<IRewatchMarkerStore, RewatchMarkerStore>();
+            serviceCollection.AddSingleton<IDiscoveryStore, DiscoveryStore>(); // Fork: discovery
+            serviceCollection.AddSingleton<IDiscoveryMetadataRefresher, DiscoveryMetadataRefresher>(); // Fork: discovery
+            serviceCollection.AddSingleton<IDiscoveryFilmSync, DiscoveryFilmSync>(); // Fork: discovery
+            serviceCollection.AddSingleton<IDiscoveryTrailers, DiscoveryTrailers>(); // Fork: discovery
+            serviceCollection.AddSingleton<IDiscoveryRowPlanner, DiscoveryRowPlanner>(); // Fork: discovery
+            serviceCollection.AddSingleton<IItemActionProvider, WatchTrailerAction>(); // Fork: discovery
             serviceCollection.AddSingleton<IRewatchCandidateFinder, RewatchCandidateFinder>();
             serviceCollection.AddSingleton<ITVSeriesManager, TVSeriesManager>();
 

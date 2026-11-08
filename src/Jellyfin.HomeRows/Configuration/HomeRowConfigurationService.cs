@@ -1,6 +1,8 @@
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.Linq;
+using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Text.Json.Serialization;
@@ -37,6 +39,11 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
     /// The maximum length of a row title.
     /// </summary>
     public const int MaxTitleLength = 100;
+
+    /// <summary>
+    /// The most rows one row of an <see cref="IExpandingHomeRowProvider"/> expands into.
+    /// </summary>
+    public const int MaxExpandedRows = 10;
 
     private const string UpstreamSettingsClient = "emby";
     private const string UpstreamSettingsId = "usersettings";
@@ -224,7 +231,86 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
     public async Task<EffectiveHomeRow?> FindRowAsync(User user, Guid rowId, CancellationToken ct)
     {
         var layout = await GetEffectiveLayoutAsync(user, ct).ConfigureAwait(false);
-        return layout.Rows.FirstOrDefault(r => r.Row.Id.Equals(rowId));
+        if (layout.Rows.FirstOrDefault(r => r.Row.Id.Equals(rowId)) is { } row)
+        {
+            return row;
+        }
+
+        // A derived id of an expanded row: the parent row, with the sub row it stands for.
+        foreach (var parent in layout.Rows.Where(IsExpanding))
+        {
+            for (var i = 0; i < MaxExpandedRows; i++)
+            {
+                if (GetDerivedRowId(parent.Row.Id, i).Equals(rowId))
+                {
+                    return parent with { SubRow = i };
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <inheritdoc />
+    public async Task<EffectiveHomeRowLayout> ExpandAsync(User user, EffectiveHomeRowLayout layout, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(user);
+        ArgumentNullException.ThrowIfNull(layout);
+
+        var context = new HomeRowContext(user, new DtoOptions(), DateTime.UtcNow);
+        var rows = new List<EffectiveHomeRow>(layout.Rows.Count);
+        foreach (var row in layout.Rows)
+        {
+            if (!IsExpanding(row))
+            {
+                rows.Add(row);
+                continue;
+            }
+
+            var provider = (IExpandingHomeRowProvider)_providerFactory.Get(row.Row.Provider)!;
+            int count;
+            try
+            {
+                var schema = await provider.GetSchemaAsync(context, ct).ConfigureAwait(false);
+                var config = HomeRowConfigValidator.Validate(schema, row.Row.Config).Config;
+                count = Math.Clamp(await provider.GetRowCountAsync(context, config, ct).ConfigureAwait(false), 0, MaxExpandedRows);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
+            {
+                // One failing provider must not break the layout: its row is left out.
+                _logger.LogError(ex, "Expanding home row {RowId} of provider {ProviderId} failed", row.Row.Id, row.Row.Provider);
+                count = 0;
+            }
+
+            for (var i = 0; i < count; i++)
+            {
+                rows.Add(row with { Row = row.Row with { Id = GetDerivedRowId(row.Row.Id, i) }, SubRow = i });
+            }
+        }
+
+        return layout with { Rows = rows };
+    }
+
+    /// <summary>
+    /// Gets the id of row <paramref name="index"/> of an expanded row: a GUID made of the MD5 of the 16 bytes of
+    /// <paramref name="parentId"/> (<see cref="Guid.ToByteArray()"/>) followed by <paramref name="index"/> as a
+    /// 32 bit little-endian integer.
+    /// </summary>
+    /// <param name="parentId">The id of the layout row.</param>
+    /// <param name="index">The index of the derived row, from 0.</param>
+    /// <returns>The derived row id.</returns>
+    public static Guid GetDerivedRowId(Guid parentId, int index)
+    {
+        Span<byte> bytes = stackalloc byte[20];
+        parentId.TryWriteBytes(bytes);
+        BinaryPrimitives.WriteInt32LittleEndian(bytes[16..], index);
+        Span<byte> hash = stackalloc byte[MD5.HashSizeInBytes];
+
+        // Not security related: MD5 only derives a stable row id, like upstream's GetMD5.
+#pragma warning disable CA5351
+        MD5.HashData(bytes, hash);
+#pragma warning restore CA5351
+        return new Guid(hash);
     }
 
     private static Task<CustomHomeRowDefault?> GetDefaultEntityAsync(CustomDbContext context, bool readOnly, CancellationToken ct)
@@ -290,6 +376,9 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         }
     }
 
+    private bool IsExpanding(EffectiveHomeRow row)
+        => row.Row.Enabled && row.IsAvailable && _providerFactory.Get(row.Row.Provider) is IExpandingHomeRowProvider;
+
     private EffectiveHomeRowLayout ToLayout(HomeRowLayoutSource source, IEnumerable<HomeRowInstance> rows)
         => new(source, rows.Select(r => new EffectiveHomeRow(r, _providerFactory.Get(r.Provider) is not null)).ToArray());
 
@@ -310,6 +399,12 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         var context = new HomeRowContext(user, new DtoOptions(), DateTime.UtcNow);
         var schemas = new Dictionary<string, HomeRowSchema>(StringComparer.Ordinal);
         var ids = new HashSet<Guid>();
+
+        // Ruling: the ids of expanded rows are rejected, so saving the display view can't multiply an expanding row.
+        var derivedIds = stored.Concat(rows)
+            .Where(r => _providerFactory.Get(r.Provider) is IExpandingHomeRowProvider)
+            .SelectMany(r => Enumerable.Range(0, MaxExpandedRows).Select(i => GetDerivedRowId(r.Id, i)))
+            .ToHashSet();
         for (var i = 0; i < rows.Count; i++)
         {
             var row = rows[i];
@@ -317,6 +412,10 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
             if (!ids.Add(id))
             {
                 errors.Add(new HomeRowSaveError(i, "id", "The row id is used by another row."));
+            }
+            else if (derivedIds.Contains(id))
+            {
+                errors.Add(new HomeRowSaveError(i, "id", "The row id is the id of an expanded row; save the layout from HomeRows/Configuration without expand."));
             }
 
             var title = row.Title?.Trim();

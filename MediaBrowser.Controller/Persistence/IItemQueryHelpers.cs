@@ -45,6 +45,9 @@ public interface IItemQueryHelpers
         IQueryable<BaseItemEntity> baseQuery,
         InternalItemsQuery filter);
 
+    /// <summary>Fork: leaves out discovery items, as every unflagged item query does.</summary><param name="context">The database context.</param><param name="baseQuery">The items.</param><returns>The items outside discovery.</returns>
+    IQueryable<BaseItemEntity> ApplyDiscoveryGuard(JellyfinDbContext context, IQueryable<BaseItemEntity> baseQuery); // Fork: discovery
+
     /// <summary>
     /// Applies navigation property includes to a query based on filter options.
     /// </summary>

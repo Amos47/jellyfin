@@ -84,6 +84,8 @@ public sealed partial class BaseItemRepository
         JellyfinDbContext context,
         InternalItemsQuery filter)
     {
+        baseQuery = ApplyDiscoveryGuard(context, baseQuery, filter); // Fork: discovery
+
         const int HDWidth = 1200;
         const int UHDWidth = 3800;
         const int UHDHeight = 2100;

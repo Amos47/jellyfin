@@ -4,6 +4,7 @@ using Jellyfin.HomeRows.Providers;
 using Jellyfin.HomeRows.Providers.ContinueWatching;
 using Jellyfin.HomeRows.Providers.NewReleases;
 using Jellyfin.HomeRows.Sources;
+using MediaBrowser.Controller.Discovery;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Session;
 using Microsoft.Extensions.DependencyInjection;
@@ -48,6 +49,8 @@ public static class HomeRowsServiceCollectionExtensions
         services.AddSingleton<IHomeRowProvider, ActiveRecordingsProvider>();
         services.AddSingleton<IHomeRowProvider, NewReleasesProvider>();
         services.AddSingleton<IHomeRowProvider, GenreProvider>();
+        services.AddSingleton<IHomeRowProvider, MovieDiscoveryProvider>();
+        services.AddSingleton<IDiscoveryUserPicks, MovieDiscoveryPicks>();
 
         // Later tasks add one line per IHomeRowProvider here.
         return services;

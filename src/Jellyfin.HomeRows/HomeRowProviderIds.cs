@@ -40,4 +40,7 @@ public static class HomeRowProviderIds
 
     /// <summary>Genre.</summary>
     public const string Genre = "genre";
+
+    /// <summary>Movie discovery: one row per picked discovery list.</summary>
+    public const string MovieDiscovery = "movie-discovery";
 }
