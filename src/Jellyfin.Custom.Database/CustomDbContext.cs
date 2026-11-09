@@ -45,6 +45,21 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
     /// </summary>
     public DbSet<CustomDiscoveryPickSnapshot> DiscoveryPickSnapshots => Set<CustomDiscoveryPickSnapshot>();
 
+    /// <summary>
+    /// Gets the users' named lists of films.
+    /// </summary>
+    public DbSet<CustomUserList> UserLists => Set<CustomUserList>();
+
+    /// <summary>
+    /// Gets the films of the users' lists.
+    /// </summary>
+    public DbSet<CustomUserListItem> UserListItems => Set<CustomUserListItem>();
+
+    /// <summary>
+    /// Gets the markers of the one-time data changes that ran.
+    /// </summary>
+    public DbSet<CustomMarker> Markers => Set<CustomMarker>();
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -91,6 +106,34 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
             entity.ToTable("CustomDiscoveryPickSnapshots");
             entity.HasKey(e => new { e.UserId, e.Day });
             entity.HasIndex(e => e.Day);
+        });
+
+        modelBuilder.Entity<CustomUserList>(entity =>
+        {
+            entity.ToTable("CustomUserLists");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).ValueGeneratedNever();
+            entity.Property(e => e.Name).HasMaxLength(100);
+            entity.HasIndex(e => e.UserId);
+
+            // One default list per user, even if two first reads create it at once.
+            entity.HasIndex(e => e.UserId, "IX_CustomUserLists_UserId_Default").IsUnique().HasFilter("\"IsDefault\" = 1");
+            entity.HasMany(e => e.Items).WithOne().HasForeignKey(i => i.ListId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CustomUserListItem>(entity =>
+        {
+            entity.ToTable("CustomUserListItems");
+            entity.HasKey(e => new { e.ListId, e.TmdbId });
+            entity.Property(e => e.ImdbId).HasMaxLength(32);
+            entity.HasIndex(e => e.TmdbId);
+        });
+
+        modelBuilder.Entity<CustomMarker>(entity =>
+        {
+            entity.ToTable("CustomMarkers");
+            entity.HasKey(e => e.Id);
+            entity.Property(e => e.Id).HasMaxLength(100).ValueGeneratedNever();
         });
     }
 }

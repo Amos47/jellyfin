@@ -179,7 +179,9 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
 
             var actions = await GetAsync<JsonArray>(client, $"Items/{Sync.FindFilm(1131)!.Id:N}/Actions");
 
-            var action = Assert.Single(actions)!;
+            // Watch trailer first, then Save (on every discovery film).
+            Assert.Equal(new[] { "watch-trailer", "save" }, actions.Select(a => (string?)a!["Id"]).ToArray());
+            var action = actions[0]!;
             Assert.Equal("watch-trailer", (string?)action["Id"]);
             Assert.Equal("Watch trailer", (string?)action["Label"]);
             Assert.Equal("trailer", (string?)action["Icon"]);
@@ -192,7 +194,7 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
     }
 
     [Fact]
-    public async Task Actions_FilmWithoutTrailer_Empty()
+    public async Task Actions_FilmWithoutTrailer_NoWatchTrailer()
     {
         var client = await SetUpAsync();
         try
@@ -204,7 +206,8 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
             using var queue = await client.GetAsync($"Items/{filmId:N}/Actions/watch-trailer/Queue", Ct);
             using var missing = await client.GetAsync($"Items/{Guid.NewGuid():N}/Actions", Ct);
 
-            Assert.Empty(actions);
+            // Only Save, which every discovery film has.
+            Assert.Equal("save", (string?)Assert.Single(actions)!["Id"]);
             Assert.Equal(HttpStatusCode.NotFound, queue.StatusCode);
             Assert.Equal(HttpStatusCode.NotFound, missing.StatusCode);
         }

@@ -59,4 +59,16 @@ public interface IItemActionProvider
     /// <returns>The entries.</returns>
     Task<IReadOnlyList<QueueEntry>> GetQueueEntriesAsync(User user, BaseItem item, string? listId, CancellationToken cancellationToken)
         => GetQueueEntriesAsync(user, item, cancellationToken);
+
+    /// <summary>
+    /// Performs the action on an item (<c>POST Items/{id}/Actions/{actionId}</c>), such as flipping a
+    /// <see cref="ItemAction.ToggleKind"/> action. Only called when <see cref="GetActionAsync"/> offers the action. The
+    /// default performs nothing, for actions that are only played (<see cref="ItemAction.PlayQueueKind"/>).
+    /// </summary>
+    /// <param name="user">The user.</param>
+    /// <param name="item">The item, already checked to be visible to the user.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The action as it is now, or null if this action can't be performed.</returns>
+    Task<ItemAction?> PerformAsync(User user, BaseItem item, CancellationToken cancellationToken)
+        => Task.FromResult<ItemAction?>(null);
 }

@@ -18,7 +18,8 @@ namespace Emby.Server.Implementations.Discovery;
 
 /// <summary>
 /// Fork: creates a pathless virtual <see cref="Movie"/> in the discovery folder for every TMDB id in a discovery
-/// list, and deletes the virtual films (with their extras) that are in no list. Library films are never touched.
+/// list, and deletes the virtual films (with their extras) that are in no list. A film in any user's list (such as
+/// Saved) is kept even when no discovery list has it any more. Library films are never touched.
 /// </summary>
 public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
 {
@@ -26,6 +27,7 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
 
     private readonly ILibraryManager _libraryManager;
     private readonly IDiscoveryStore _store;
+    private readonly IUserListStore _userLists;
     private readonly IDiscoveryFolderLocator _folderLocator;
     private readonly IDiscoveryMetadataRefresher _refresher;
     private readonly ILogger<DiscoveryFilmSync> _logger;
@@ -36,18 +38,21 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
     /// </summary>
     /// <param name="libraryManager">The library manager.</param>
     /// <param name="store">The discovery store.</param>
+    /// <param name="userLists">The user list store, whose films are kept.</param>
     /// <param name="folderLocator">The discovery folder locator.</param>
     /// <param name="refresher">The metadata refresher.</param>
     /// <param name="logger">The logger.</param>
     public DiscoveryFilmSync(
         ILibraryManager libraryManager,
         IDiscoveryStore store,
+        IUserListStore userLists,
         IDiscoveryFolderLocator folderLocator,
         IDiscoveryMetadataRefresher refresher,
         ILogger<DiscoveryFilmSync> logger)
     {
         _libraryManager = libraryManager;
         _store = store;
+        _userLists = userLists;
         _folderLocator = folderLocator;
         _refresher = refresher;
         _logger = logger;
@@ -75,7 +80,9 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
                 }
             }
 
-            var wantedIds = wanted.Keys.Select(GetFilmId).ToHashSet();
+            // Films in a user's list are kept, though not created: they were discovery films when they were added.
+            var listed = await _userLists.GetListedTmdbIdsAsync(cancellationToken).ConfigureAwait(false);
+            var wantedIds = wanted.Keys.Concat(listed).Select(GetFilmId).ToHashSet();
             var folder = _folderLocator.GetFolder();
 
             foreach (var film in GetFilms(folder.Id))

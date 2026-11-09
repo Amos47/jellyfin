@@ -47,7 +47,7 @@ public sealed class WatchTrailerActionTests : IDisposable
     {
         _picks.Setup(p => p.GetPickedListsAsync(_user, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new InvalidOperationException("broken layout"));
-        var action = new WatchTrailerAction(_picks.Object, _planner.Object, Mock.Of<IDiscoveryFilmSync>(), Mock.Of<IDiscoveryStore>(), NullLogger<WatchTrailerAction>.Instance);
+        var action = new WatchTrailerAction(_picks.Object, _planner.Object, Mock.Of<IDiscoveryFilmSync>(), Mock.Of<IDiscoveryStore>(), Mock.Of<IUserListStore>(), NullLogger<WatchTrailerAction>.Instance);
 
         var queue = await action.GetQueueAsync(_user, new Movie { Id = Guid.NewGuid() }, Ct);
 
@@ -59,7 +59,7 @@ public sealed class WatchTrailerActionTests : IDisposable
     {
         _picks.Setup(p => p.GetPickedListsAsync(_user, It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
             .ThrowsAsync(new OperationCanceledException());
-        var action = new WatchTrailerAction(_picks.Object, _planner.Object, Mock.Of<IDiscoveryFilmSync>(), Mock.Of<IDiscoveryStore>(), NullLogger<WatchTrailerAction>.Instance);
+        var action = new WatchTrailerAction(_picks.Object, _planner.Object, Mock.Of<IDiscoveryFilmSync>(), Mock.Of<IDiscoveryStore>(), Mock.Of<IUserListStore>(), NullLogger<WatchTrailerAction>.Instance);
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => action.GetQueueAsync(_user, new Movie { Id = Guid.NewGuid() }, Ct));
     }
@@ -73,7 +73,7 @@ public sealed class WatchTrailerActionTests : IDisposable
         var secondTrailer = new Video { Id = Guid.NewGuid(), Name = "Trailer" };
         SetTrailers((first.Id, firstTrailer), (second.Id, secondTrailer));
         var list = SetUpPick(first, second);
-        var action = new WatchTrailerAction(_picks.Object, _planner.Object, Mock.Of<IDiscoveryFilmSync>(), Mock.Of<IDiscoveryStore>(), NullLogger<WatchTrailerAction>.Instance);
+        var action = new WatchTrailerAction(_picks.Object, _planner.Object, Mock.Of<IDiscoveryFilmSync>(), Mock.Of<IDiscoveryStore>(), Mock.Of<IUserListStore>(), NullLogger<WatchTrailerAction>.Instance);
 
         var entries = await action.GetQueueEntriesAsync(_user, first, Ct);
         var ids = await action.GetQueueAsync(_user, first, Ct);
@@ -101,7 +101,7 @@ public sealed class WatchTrailerActionTests : IDisposable
             .ReturnsAsync([]);
         var sync = new Mock<IDiscoveryFilmSync>();
         sync.Setup(s => s.FindFilm(77)).Returns(copy);
-        var action = new WatchTrailerAction(_picks.Object, _planner.Object, sync.Object, Mock.Of<IDiscoveryStore>(), NullLogger<WatchTrailerAction>.Instance);
+        var action = new WatchTrailerAction(_picks.Object, _planner.Object, sync.Object, Mock.Of<IDiscoveryStore>(), Mock.Of<IUserListStore>(), NullLogger<WatchTrailerAction>.Instance);
 
         var entry = Assert.Single(await action.GetQueueEntriesAsync(_user, owned, Ct));
 
@@ -121,7 +121,7 @@ public sealed class WatchTrailerActionTests : IDisposable
         SetUpPick(discovery, owned);
         var sync = new Mock<IDiscoveryFilmSync>();
         sync.Setup(s => s.FindFilm(101)).Returns(ownedCopy);
-        var action = new WatchTrailerAction(_picks.Object, _planner.Object, sync.Object, Mock.Of<IDiscoveryStore>(), NullLogger<WatchTrailerAction>.Instance);
+        var action = new WatchTrailerAction(_picks.Object, _planner.Object, sync.Object, Mock.Of<IDiscoveryStore>(), Mock.Of<IUserListStore>(), NullLogger<WatchTrailerAction>.Instance);
 
         var entries = await action.GetQueueEntriesAsync(_user, discovery, Ct);
 
@@ -143,7 +143,7 @@ public sealed class WatchTrailerActionTests : IDisposable
         var sync = new Mock<IDiscoveryFilmSync>();
         sync.Setup(s => s.FindFilm(88)).Returns(copy);
         sync.Setup(s => s.FindOwned(_user, 88, null)).Returns(owned);
-        var action = new WatchTrailerAction(_picks.Object, _planner.Object, sync.Object, Mock.Of<IDiscoveryStore>(), NullLogger<WatchTrailerAction>.Instance);
+        var action = new WatchTrailerAction(_picks.Object, _planner.Object, sync.Object, Mock.Of<IDiscoveryStore>(), Mock.Of<IUserListStore>(), NullLogger<WatchTrailerAction>.Instance);
 
         var entry = Assert.Single(await action.GetQueueEntriesAsync(_user, copy, Ct));
 

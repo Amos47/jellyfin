@@ -909,6 +909,54 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
         Assert.DoesNotContain(upstream.Rows, r => r.Row.Provider == Expanding || r.Row.Provider == HomeRowProviderIds.MovieDiscovery);
     }
 
+    [Fact]
+    public async Task UserListRow_InsertedOnceAfterDiscovery()
+    {
+        // Alice has Movie discovery mid-layout, Bob has none, the admin default has it last; the admin's own layout
+        // already has a user-list row.
+        var discovery = Guid.NewGuid();
+        await StoreUserJsonAsync(_user.Id, Json(Stored(Guid.NewGuid(), HomeRowProviderIds.Resume), Stored(discovery, HomeRowProviderIds.MovieDiscovery), Stored(Guid.NewGuid(), HomeRowProviderIds.NextUp)));
+        await StoreUserJsonAsync(_other.Id, Json(Stored(Guid.NewGuid(), HomeRowProviderIds.Resume)));
+        await StoreUserJsonAsync(_admin.Id, Json(Stored(Guid.NewGuid(), HomeRowProviderIds.UserList), Stored(Guid.NewGuid(), HomeRowProviderIds.MovieDiscovery)));
+        await StoreDefaultJsonAsync(Json(Stored(Guid.NewGuid(), HomeRowProviderIds.MovieDiscovery)));
+        var service = CreateService();
+
+        Assert.True(await service.InsertUserListRowsOnceAsync(Ct));
+
+        var alice = (await service.GetEffectiveLayoutAsync(_user, Ct)).Rows.Select(r => r.Row).ToList();
+        Assert.Equal(
+            new[] { HomeRowProviderIds.Resume, HomeRowProviderIds.MovieDiscovery, HomeRowProviderIds.UserList, HomeRowProviderIds.NextUp },
+            alice.Select(r => r.Provider));
+        var inserted = alice[2];
+        Assert.True(inserted.Enabled);
+        Assert.Null(inserted.Title);
+        Assert.Empty(inserted.Config);
+        Assert.False(HomeRowConfigurationService.HasDerivedRowPrefix(discovery, inserted.Id));
+        Assert.Equal(
+            new[] { HomeRowProviderIds.Resume, HomeRowProviderIds.UserList },
+            (await service.GetEffectiveLayoutAsync(_other, Ct)).Rows.Select(r => r.Row.Provider));
+        Assert.Equal(
+            new[] { HomeRowProviderIds.UserList, HomeRowProviderIds.MovieDiscovery },
+            (await service.GetEffectiveLayoutAsync(_admin, Ct)).Rows.Select(r => r.Row.Provider));
+        Assert.Equal(
+            new[] { HomeRowProviderIds.MovieDiscovery, HomeRowProviderIds.UserList },
+            (await service.GetAdminDefaultAsync(Ct))!.Select(r => r.Provider));
+
+        // Alice removes the row; the insert never runs again, on this service or a new one (a restart).
+        await StoreUserJsonAsync(_user.Id, Json(Stored(Guid.NewGuid(), HomeRowProviderIds.Resume)));
+        Assert.False(await service.InsertUserListRowsOnceAsync(Ct));
+        Assert.False(await CreateService().InsertUserListRowsOnceAsync(Ct));
+        Assert.Equal(
+            new[] { HomeRowProviderIds.Resume },
+            (await service.GetEffectiveLayoutAsync(_user, Ct)).Rows.Select(r => r.Row.Provider));
+    }
+
+    private static JsonObject Stored(Guid id, string provider)
+        => new() { ["id"] = id.ToString("D"), ["provider"] = provider, ["title"] = null, ["config"] = new JsonObject(), ["enabled"] = true };
+
+    private static string Json(params JsonObject[] rows)
+        => new JsonArray(rows.Select(r => (JsonNode)r).ToArray()).ToJsonString();
+
     private static string Library(Guid id) => id.ToString("N");
 
     private static HomeRowInstance Row(string provider, JsonObject? config = null)

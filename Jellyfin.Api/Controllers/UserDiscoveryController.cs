@@ -24,8 +24,9 @@ using Microsoft.AspNetCore.Mvc;
 namespace Jellyfin.Api.Controllers;
 
 /// <summary>
-/// Fork: the discovery routes every user may call: a discovery list's page and its actions. The admin-only
-/// <see cref="DiscoveryController"/> keeps the routes the discovery app uses.
+/// Fork: the discovery routes every user may call: a discovery list's page and its actions, and the user's own named
+/// lists (Saved). A page list id is a discovery list id, or <c>user:{guid}</c> for one of the caller's own lists; another
+/// user's list is a 404. The admin-only <see cref="DiscoveryController"/> keeps the routes the discovery app uses.
 /// </summary>
 [Route("Discovery")]
 [Authorize]
@@ -33,6 +34,8 @@ namespace Jellyfin.Api.Controllers;
 public class UserDiscoveryController : BaseJellyfinApiController
 {
     private readonly IDiscoveryStore _store;
+    private readonly IUserListStore _userLists;
+    private readonly IDiscoveryFilmSync _filmSync;
     private readonly IDiscoveryRowPlanner _planner;
     private readonly IEnumerable<IDiscoveryListActionProvider> _actions;
     private readonly IDtoService _dtoService;
@@ -42,18 +45,24 @@ public class UserDiscoveryController : BaseJellyfinApiController
     /// Initializes a new instance of the <see cref="UserDiscoveryController"/> class.
     /// </summary>
     /// <param name="store">Instance of the <see cref="IDiscoveryStore"/> interface.</param>
+    /// <param name="userLists">Instance of the <see cref="IUserListStore"/> interface.</param>
+    /// <param name="filmSync">Instance of the <see cref="IDiscoveryFilmSync"/> interface.</param>
     /// <param name="planner">Instance of the <see cref="IDiscoveryRowPlanner"/> interface.</param>
     /// <param name="actions">The registered <see cref="IDiscoveryListActionProvider"/>s.</param>
     /// <param name="dtoService">Instance of the <see cref="IDtoService"/> interface.</param>
     /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
     public UserDiscoveryController(
         IDiscoveryStore store,
+        IUserListStore userLists,
+        IDiscoveryFilmSync filmSync,
         IDiscoveryRowPlanner planner,
         IEnumerable<IDiscoveryListActionProvider> actions,
         IDtoService dtoService,
         IUserManager userManager)
     {
         _store = store;
+        _userLists = userLists;
+        _filmSync = filmSync;
         _planner = planner;
         _actions = actions;
         _dtoService = dtoService;
@@ -62,10 +71,11 @@ public class UserDiscoveryController : BaseJellyfinApiController
 
     /// <summary>
     /// Gets a discovery list's page for the current user: its title, the header images and the films the user can
-    /// play (owned, or with a local trailer), in list order, the same films a Home row of the list shows. Each header
-    /// image is the first film's that has one.
+    /// play (owned, or with a local trailer), in list order, the same films a Home row of the list shows. A user list's
+    /// page (<c>user:{guid}</c>) shows every film the user may see, playable or not, newest first, as its row does. Each
+    /// header image is the first film's that has one.
     /// </summary>
-    /// <param name="listId">The list id.</param>
+    /// <param name="listId">The list id, or <c>user:{guid}</c> for one of the user's lists.</param>
     /// <param name="fields">Optional. Additional fields of the items to return.</param>
     /// <param name="enableImageTypes">Optional. The image types to include.</param>
     /// <param name="enableUserData">Optional. Include user data.</param>
@@ -73,7 +83,7 @@ public class UserDiscoveryController : BaseJellyfinApiController
     /// <param name="enableImages">Optional. Include image information.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <response code="200">Page returned.</response>
-    /// <response code="404">There is no list with that id, or the caller has no user.</response>
+    /// <response code="404">There is no list with that id (or it is another user's), or the caller has no user.</response>
     /// <returns>The page.</returns>
     [HttpGet("Lists/{listId}/Page")]
     [ProducesResponseType(StatusCodes.Status200OK)]
@@ -93,7 +103,7 @@ public class UserDiscoveryController : BaseJellyfinApiController
         }
 
         var (user, list) = resolved;
-        var films = _planner.GetRowItems(user, list, true).Select(f => f.Item).ToArray();
+        var films = _planner.GetRowItems(user, list, !DiscoveryPageLists.IsUserList(listId)).Select(f => f.Item).ToArray();
         var dtoOptions = new DtoOptions { Fields = fields }
             .AddAdditionalDtoOptions(enableImages, enableUserData, imageTypeLimit, enableImageTypes);
         var items = _dtoService.GetBaseItemDtos(films, dtoOptions, user);
@@ -130,7 +140,7 @@ public class UserDiscoveryController : BaseJellyfinApiController
         {
             if (await provider.GetListActionAsync(user, list, cancellationToken).ConfigureAwait(false) is { } action)
             {
-                actions.Add(new ItemActionDto(action.Id, action.Label, action.Icon, action.Kind));
+                actions.Add(ItemActionDto.From(action));
             }
         }
 
@@ -172,20 +182,143 @@ public class UserDiscoveryController : BaseJellyfinApiController
         return Ok(ItemActionsController.ToQueueDto(queue));
     }
 
+    /// <summary>
+    /// Gets the current user's named lists, the default one (Saved) first. Saved is created on the first read.
+    /// </summary>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="200">Lists returned.</response>
+    /// <response code="404">The caller has no user.</response>
+    /// <returns>The lists.</returns>
+    [HttpGet("UserLists")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<UserListDto[]>> GetUserLists(CancellationToken cancellationToken)
+    {
+        if (GetUser() is not { } user)
+        {
+            return NotFound();
+        }
+
+        var lists = await _userLists.GetListsAsync(user.Id, cancellationToken).ConfigureAwait(false);
+        return Ok(lists.Select(ToDto).ToArray());
+    }
+
+    /// <summary>
+    /// Gets one of the current user's named lists.
+    /// </summary>
+    /// <param name="listId">The list id.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="200">List returned.</response>
+    /// <response code="404">The user has no list with that id, or the caller has no user.</response>
+    /// <returns>The list.</returns>
+    [HttpGet("UserLists/{listId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<UserListDto>> GetUserList([FromRoute, Required] Guid listId, CancellationToken cancellationToken)
+    {
+        if (GetUser() is not { } user
+            || await _userLists.GetListAsync(user.Id, listId, cancellationToken).ConfigureAwait(false) is not { } list)
+        {
+            return NotFound();
+        }
+
+        return Ok(ToDto(list));
+    }
+
+    /// <summary>
+    /// Adds a film to one of the current user's lists, by TMDB id. The film must be a discovery film the user may see,
+    /// or a film the user owns. A film already in the list keeps its place.
+    /// </summary>
+    /// <param name="listId">The list id.</param>
+    /// <param name="tmdbId">The TMDB id of the film.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="200">Film added; the updated list returned.</response>
+    /// <response code="404">The user has no list with that id, the server doesn't know the film, or the caller has no user.</response>
+    /// <returns>The updated list.</returns>
+    [HttpPost("UserLists/{listId}/Films/{tmdbId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<UserListDto>> AddUserListFilm([FromRoute, Required] Guid listId, [FromRoute, Required] int tmdbId, CancellationToken cancellationToken)
+    {
+        if (GetUser() is not { } user || tmdbId <= 0)
+        {
+            return NotFound();
+        }
+
+        // A discovery film the user may see, else the user's own film: never a film the server doesn't know.
+        string? imdbId;
+        if (_filmSync.FindFilm(tmdbId) is { } film && film.IsVisibleStandalone(user))
+        {
+            imdbId = film.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Imdb);
+        }
+        else if (_filmSync.FindOwned(user, tmdbId, null) is { } owned)
+        {
+            imdbId = owned.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Imdb);
+        }
+        else
+        {
+            return NotFound();
+        }
+
+        // Not the request's token: once added, the film stays even if the client hangs up.
+        if (!await _userLists.AddFilmAsync(user.Id, listId, tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, CancellationToken.None).ConfigureAwait(false))
+        {
+            return NotFound();
+        }
+
+        return await GetUserList(listId, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Removes a film from one of the current user's lists. Removing a film that isn't in it changes nothing.
+    /// </summary>
+    /// <param name="listId">The list id.</param>
+    /// <param name="tmdbId">The TMDB id of the film.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="200">Film removed; the updated list returned.</response>
+    /// <response code="404">The user has no list with that id, or the caller has no user.</response>
+    /// <returns>The updated list.</returns>
+    [HttpDelete("UserLists/{listId}/Films/{tmdbId}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<UserListDto>> RemoveUserListFilm([FromRoute, Required] Guid listId, [FromRoute, Required] int tmdbId, CancellationToken cancellationToken)
+    {
+        if (GetUser() is not { } user
+            || !await _userLists.RemoveFilmAsync(user.Id, listId, tmdbId, CancellationToken.None).ConfigureAwait(false))
+        {
+            return NotFound();
+        }
+
+        return await GetUserList(listId, cancellationToken).ConfigureAwait(false);
+    }
+
+    private static UserListDto ToDto(UserList list)
+        => new(
+            list.Id,
+            list.Name,
+            list.IsDefault,
+            list.PageListId,
+            list.Films.Select(f => new UserListFilmDto(f.TmdbId, f.ImdbId, f.AddedAt)).ToArray());
+
     private static Guid? FirstWith(IEnumerable<BaseItem> films, ImageType type)
         => films.FirstOrDefault(f => f.HasImage(type))?.Id;
 
-    // The calling user and the list. An API key has no user (empty id), and GetUserById throws on an empty id.
-    private async Task<(User User, DiscoveryList List)?> ResolveAsync(string listId, CancellationToken cancellationToken)
+    // The calling user. An API key has no user (empty id), and GetUserById throws on an empty id.
+    private User? GetUser()
     {
         var userId = RequestHelpers.GetUserId(User, null);
-        var user = userId.IsEmpty() ? null : _userManager.GetUserById(userId);
-        if (user is null)
+        return userId.IsEmpty() ? null : _userManager.GetUserById(userId);
+    }
+
+    // The calling user and the list: a discovery list, or one of the user's own lists (user:{guid}).
+    private async Task<(User User, DiscoveryList List)?> ResolveAsync(string listId, CancellationToken cancellationToken)
+    {
+        if (GetUser() is not { } user)
         {
             return null;
         }
 
-        var list = await _store.GetListAsync(listId, cancellationToken).ConfigureAwait(false);
+        var list = await DiscoveryPageLists.GetAsync(_store, _userLists, user, listId, cancellationToken).ConfigureAwait(false);
         return list is null ? null : (user, list);
     }
 }

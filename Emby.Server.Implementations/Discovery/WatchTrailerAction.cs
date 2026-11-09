@@ -41,6 +41,7 @@ public sealed class WatchTrailerAction : IItemActionProvider, IDiscoveryListActi
     private readonly IDiscoveryRowPlanner _planner;
     private readonly IDiscoveryFilmSync _filmSync;
     private readonly IDiscoveryStore _store;
+    private readonly IUserListStore _userLists;
     private readonly ILogger<WatchTrailerAction> _logger;
 
     /// <summary>
@@ -50,13 +51,15 @@ public sealed class WatchTrailerAction : IItemActionProvider, IDiscoveryListActi
     /// <param name="planner">The discovery row planner.</param>
     /// <param name="filmSync">The discovery film sync, to find an owned film's hidden copy.</param>
     /// <param name="store">The discovery store, for the list a queue was started from.</param>
+    /// <param name="userLists">The user list store, for a user list a queue was started from.</param>
     /// <param name="logger">The logger.</param>
-    public WatchTrailerAction(IDiscoveryUserPicks picks, IDiscoveryRowPlanner planner, IDiscoveryFilmSync filmSync, IDiscoveryStore store, ILogger<WatchTrailerAction> logger)
+    public WatchTrailerAction(IDiscoveryUserPicks picks, IDiscoveryRowPlanner planner, IDiscoveryFilmSync filmSync, IDiscoveryStore store, IUserListStore userLists, ILogger<WatchTrailerAction> logger)
     {
         _picks = picks;
         _planner = planner;
         _filmSync = filmSync;
         _store = store;
+        _userLists = userLists;
         _logger = logger;
     }
 
@@ -93,9 +96,10 @@ public sealed class WatchTrailerAction : IItemActionProvider, IDiscoveryListActi
         ArgumentNullException.ThrowIfNull(item);
 
         // Started from a list (its page, or a film opened from it): the queue goes on through that list's playable
-        // films, the ones its page shows. A film that isn't one of them gets the queue it would get without a list.
+        // films, the ones its page shows. A film that isn't one of them gets the queue it would get without a list. A
+        // user list (user:{guid}) counts only for its owner.
         if (!string.IsNullOrEmpty(listId)
-            && await _store.GetListAsync(listId, cancellationToken).ConfigureAwait(false) is { } startList
+            && await DiscoveryPageLists.GetAsync(_store, _userLists, user, listId, cancellationToken).ConfigureAwait(false) is { } startList
             && GetFrom(user, _planner.GetRowItems(user, startList, true), item) is { } fromList)
         {
             return fromList;

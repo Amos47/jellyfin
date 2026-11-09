@@ -30,7 +30,8 @@ namespace Jellyfin.Server.Integration.Tests.Controllers
             HomeRowProviderIds.ContinueWatching,
             HomeRowProviderIds.NewReleases,
             HomeRowProviderIds.Genre,
-            HomeRowProviderIds.MovieDiscovery
+            HomeRowProviderIds.MovieDiscovery,
+            HomeRowProviderIds.UserList
         ];
 
         // Upstream's standard home sections; latest media maps to one row per library, and the test server has none.
@@ -53,7 +54,7 @@ namespace Jellyfin.Server.Integration.Tests.Controllers
         }
 
         [Fact]
-        public async Task Providers_ListsAllThirteenIds()
+        public async Task Providers_ListsAllFourteenIds()
         {
             var client = await CreateClientAsync();
 

@@ -448,11 +448,12 @@ public sealed class DiscoveryContractTests : IClassFixture<JellyfinApplicationFa
         var layouts = _factory.Services.GetRequiredService<IHomeRowConfigurationService>();
         var admin = _factory.Services.GetRequiredService<IUserManager>().GetUserById(contract.UserId)!;
 
-        // Every built-in provider but Movie discovery, read from the id constants so a new provider is covered too.
+        // Every built-in provider but Movie discovery and the user's lists (both show discovery films by design), read
+        // from the id constants so a new provider is covered too.
         var providerIds = typeof(HomeRowProviderIds).GetFields(BindingFlags.Public | BindingFlags.Static)
             .Where(f => f.IsLiteral && f.FieldType == typeof(string))
             .Select(f => (string)f.GetRawConstantValue()!)
-            .Where(id => id != HomeRowProviderIds.MovieDiscovery)
+            .Where(id => id != HomeRowProviderIds.MovieDiscovery && id != HomeRowProviderIds.UserList)
             .ToArray();
         var rows = providerIds.Select(id => new HomeRowInstance(Guid.NewGuid(), id, null, RowConfig(id, contract), true)).ToArray();
         try

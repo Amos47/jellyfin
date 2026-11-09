@@ -13,7 +13,8 @@ public interface IDiscoveryFilmSync
 {
     /// <summary>
     /// Makes sure a virtual film exists for every TMDB id in any list, and deletes the virtual films (and their
-    /// extras) that are in no list. Library films are never touched.
+    /// extras) that are in no list. Films in any user's list (<see cref="IUserListStore"/>) are kept, not created.
+    /// Library films are never touched.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task.</returns>

@@ -92,4 +92,16 @@ public interface IHomeRowConfigurationService
     /// <param name="ct">The cancellation token.</param>
     /// <returns>The expanded layout.</returns>
     Task<EffectiveHomeRowLayout> ExpandAsync(User user, EffectiveHomeRowLayout layout, CancellationToken ct);
+
+    /// <summary>
+    /// Fork: once per database, adds a <see cref="HomeRowProviderIds.UserList"/> row (Saved: default config, enabled,
+    /// no title) to every stored layout, the users' and the admin default: right after its first Movie discovery row,
+    /// or at the end when it has none. A layout that already has a user-list row, is full
+    /// (<see cref="UpstreamHomeSectionMapper.MaxRows"/>) or doesn't parse is left as it is. A marker in the fork
+    /// database records that the insert ran, so a row the user removes later never comes back. Layouts that aren't
+    /// stored (the standard default and upstream sections) are never changed.
+    /// </summary>
+    /// <param name="ct">The cancellation token.</param>
+    /// <returns>True if the insert ran now, false if it had run before.</returns>
+    Task<bool> InsertUserListRowsOnceAsync(CancellationToken ct);
 }
