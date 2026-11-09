@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
@@ -19,6 +20,17 @@ public interface IDiscoveryFilmSync
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task.</returns>
     Task SyncAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Runs work while no sync runs: a sync reads which films user lists keep and deletes the rest under the same lock,
+    /// so a film added to a user list here is either seen by the sync or was already deleted before the work started
+    /// (the work checks that the film still exists before adding it). The work must not start a sync.
+    /// </summary>
+    /// <typeparam name="T">The result type.</typeparam>
+    /// <param name="work">The work.</param>
+    /// <param name="cancellationToken">The cancellation token, for waiting on the lock.</param>
+    /// <returns>The work's result.</returns>
+    Task<T> RunExclusiveAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken);
 
     /// <summary>
     /// Gets the virtual discovery film of a TMDB id.

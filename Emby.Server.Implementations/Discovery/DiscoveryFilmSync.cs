@@ -80,7 +80,8 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
                 }
             }
 
-            // Films in a user's list are kept, though not created: they were discovery films when they were added.
+            // Films in a user's list are kept, though not created: they were discovery films when they were added. Read
+            // under the sync lock, which saves take too (RunExclusiveAsync), so a film saved meanwhile is never deleted.
             var listed = await _userLists.GetListedTmdbIdsAsync(cancellationToken).ConfigureAwait(false);
             var wantedIds = wanted.Keys.Concat(listed).Select(GetFilmId).ToHashSet();
             var folder = _folderLocator.GetFolder();
@@ -109,6 +110,22 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
                     await existing.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, cancellationToken).ConfigureAwait(false);
                 }
             }
+        }
+        finally
+        {
+            _syncLock.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<T> RunExclusiveAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+
+        await _syncLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await work().ConfigureAwait(false);
         }
         finally
         {

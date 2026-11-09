@@ -245,23 +245,30 @@ public class UserDiscoveryController : BaseJellyfinApiController
             return NotFound();
         }
 
-        // A discovery film the user may see, else the user's own film: never a film the server doesn't know.
-        string? imdbId;
-        if (_filmSync.FindFilm(tmdbId) is { } film && film.IsVisibleStandalone(user))
-        {
-            imdbId = film.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Imdb);
-        }
-        else if (_filmSync.FindOwned(user, tmdbId, null) is { } owned)
-        {
-            imdbId = owned.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Imdb);
-        }
-        else
-        {
-            return NotFound();
-        }
+        // A discovery film the user may see, else the user's own film: never a film the server doesn't know. Checked
+        // and added under the film sync's lock, so a sync can't delete the film in between. Not the request's token for
+        // the add: once added, the film stays even if the client hangs up.
+        var added = await _filmSync.RunExclusiveAsync(
+            async () =>
+            {
+                string? imdbId;
+                if (_filmSync.FindFilm(tmdbId) is { } film && film.IsVisibleStandalone(user))
+                {
+                    imdbId = film.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Imdb);
+                }
+                else if (_filmSync.FindOwned(user, tmdbId, null) is { } owned)
+                {
+                    imdbId = owned.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Imdb);
+                }
+                else
+                {
+                    return false;
+                }
 
-        // Not the request's token: once added, the film stays even if the client hangs up.
-        if (!await _userLists.AddFilmAsync(user.Id, listId, tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, CancellationToken.None).ConfigureAwait(false))
+                return await _userLists.AddFilmAsync(user.Id, listId, tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, CancellationToken.None).ConfigureAwait(false);
+            },
+            cancellationToken).ConfigureAwait(false);
+        if (!added)
         {
             return NotFound();
         }

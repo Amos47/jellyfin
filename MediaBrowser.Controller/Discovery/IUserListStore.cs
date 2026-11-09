@@ -59,6 +59,26 @@ public interface IUserListStore
     Task<bool> RemoveFilmAsync(Guid userId, Guid listId, int tmdbId, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Adds a film to one of a user's lists if it isn't in it, else removes it, in one step: concurrent toggles each
+    /// see the one before.
+    /// </summary>
+    /// <param name="userId">The user id.</param>
+    /// <param name="listId">The list id.</param>
+    /// <param name="tmdbId">The TMDB id.</param>
+    /// <param name="imdbId">The IMDb id, if known, kept when the film is added.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>True if the film is now in the list, false if it was removed, null if the user has no list with that id.</returns>
+    Task<bool?> ToggleAsync(Guid userId, Guid listId, int tmdbId, string? imdbId, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Removes every list of a user, with its films (the user was deleted).
+    /// </summary>
+    /// <param name="userId">The user id.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>A task.</returns>
+    Task RemoveUserAsync(Guid userId, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Gets the TMDB ids of every film in any user's list.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>

@@ -152,9 +152,11 @@ public sealed class UserListsTests : IClassFixture<JellyfinApplicationFactory>, 
             Assert.Equal(new[] { 4021 }, FilmTmdbIds(await GetSavedAsync(client)));
             Assert.Equal("on", (string?)SaveAction(await GetAsync<JsonArray>(client, $"Items/{Sync.FindFilm(4021)!.Id:N}/Actions"))["State"]);
 
-            // Watch trailer can't be performed.
+            // A play-queue action is played, never posted: 400 on the film and on its trailer alike.
             using var post = await client.PostAsync($"Items/{Sync.FindFilm(4021)!.Id:N}/Actions/watch-trailer", null, Ct);
             Assert.Equal(HttpStatusCode.BadRequest, post.StatusCode);
+            using var postOnTrailer = await client.PostAsync($"Items/{trailerId:N}/Actions/watch-trailer", null, Ct);
+            Assert.Equal(HttpStatusCode.BadRequest, postOnTrailer.StatusCode);
             using var unknown = await client.PostAsync($"Items/{Sync.FindFilm(4021)!.Id:N}/Actions/no-such-action", null, Ct);
             Assert.Equal(HttpStatusCode.NotFound, unknown.StatusCode);
         }
@@ -219,17 +221,31 @@ public sealed class UserListsTests : IClassFixture<JellyfinApplicationFactory>, 
     public async Task Sync_KeepsSavedFilmWhenListRotatesOut()
     {
         var client = await SetUpAsync();
+        var admin = await GetAdminAsync(client);
         try
         {
             await PutListAsync(client, "ul-sync", 4041, 4042);
-            var savedId = (string)(await GetSavedAsync(client))["Id"]!;
+            var trailerId = await SetTrailerAsync(client, 4041, "ul-4041");
+            var saved = await GetSavedAsync(client);
+            var savedId = (string)saved["Id"]!;
             await PostAsync<JsonObject>(client, $"Discovery/UserLists/{savedId}/Films/4041");
+            var rowId = Guid.NewGuid();
+            Assert.Empty(await Layouts.SaveUserLayoutAsync(admin, [new HomeRowInstance(rowId, HomeRowProviderIds.UserList, null, new JsonObject(), true)], Ct));
 
-            // The list rotates out: the saved film stays, the other goes.
+            // The list rotates out: the saved film stays with its trailer, the other goes.
             await DeleteListsAsync(client, "ul-sync");
-            Assert.NotNull(Sync.FindFilm(4041));
+            var film = Sync.FindFilm(4041);
+            Assert.NotNull(film);
             Assert.Null(Sync.FindFilm(4042));
+            Assert.Equal(new[] { trailerId }, film.GetExtras([ExtraType.Trailer]).Select(t => t.Id).ToArray());
+            Assert.NotNull(LibraryManager.GetItemById(trailerId));
             Assert.Equal(new[] { 4041 }, FilmTmdbIds(await GetSavedAsync(client)));
+
+            // It still shows in the Saved row and on its page.
+            var row = await GetAsync<JsonObject>(client, $"HomeRows/{rowId:D}/Items");
+            Assert.Equal(new[] { film.Id }, row["Items"]!.AsArray().Select(n => Guid.Parse((string)n!["Id"]!)).ToArray());
+            var page = await GetAsync<JsonObject>(client, $"Discovery/Lists/{(string)saved["PageListId"]!}/Page");
+            Assert.Equal(new[] { film.Id }, page["Items"]!.AsArray().Select(n => Guid.Parse((string)n!["Id"]!)).ToArray());
 
             // Removed from Saved, the next sync deletes it.
             await DeleteAsync(client, $"Discovery/UserLists/{savedId}/Films/4041");
@@ -238,9 +254,58 @@ public sealed class UserListsTests : IClassFixture<JellyfinApplicationFactory>, 
         }
         finally
         {
+            await Layouts.ResetUserLayoutAsync(admin, Ct);
             await ClearSavedAsync(client);
             await DeleteListsAsync(client, "ul-sync");
         }
+    }
+
+    [Fact]
+    public async Task SavedRow_InStandardDefault_EmptyUntilSomethingIsSaved()
+    {
+        var client = await SetUpAsync();
+        var (user, userClient) = await CreateNonAdminAsync();
+        try
+        {
+            await PutListAsync(client, "ul-default", 4071);
+
+            // A fresh profile on the standard default has the Saved row; with nothing saved it has no items, which
+            // every client hides like any empty row.
+            var layout = await GetAsync<JsonObject>(userClient, "HomeRows/Configuration");
+            Assert.Equal("StandardDefault", (string?)layout["Source"]);
+            var savedRow = layout["Rows"]!.AsArray().Single(r => (string?)r!["Provider"] == HomeRowProviderIds.UserList)!;
+            var rowId = (string)savedRow["Id"]!;
+            var empty = await GetAsync<JsonObject>(userClient, $"HomeRows/{rowId}/Items");
+            Assert.Empty(empty["Items"]!.AsArray());
+            Assert.Equal(0, (int?)empty["TotalRecordCount"]);
+            Assert.Null(empty["Error"]);
+
+            await PostAsync<JsonObject>(userClient, $"Items/{Sync.FindFilm(4071)!.Id:N}/Actions/save");
+            var one = await GetAsync<JsonObject>(userClient, $"HomeRows/{rowId}/Items");
+            Assert.Equal(new[] { Sync.FindFilm(4071)!.Id }, one["Items"]!.AsArray().Select(n => Guid.Parse((string)n!["Id"]!)).ToArray());
+        }
+        finally
+        {
+            await UserManager.DeleteUserAsync(user.Id);
+            await DeleteListsAsync(client, "ul-default");
+        }
+    }
+
+    [Fact]
+    public async Task DeletedUser_ListsGo_FilmNoLongerProtected()
+    {
+        var client = await SetUpAsync();
+        var (user, userClient) = await CreateNonAdminAsync();
+        await PutListAsync(client, "ul-deleted", 4081);
+        await PostAsync<JsonObject>(userClient, $"Items/{Sync.FindFilm(4081)!.Id:N}/Actions/save");
+        var lists = _factory.Services.GetRequiredService<IUserListStore>();
+        Assert.Contains(4081, await lists.GetListedTmdbIdsAsync(Ct));
+
+        await UserManager.DeleteUserAsync(user.Id);
+
+        Assert.DoesNotContain(4081, await lists.GetListedTmdbIdsAsync(Ct));
+        await DeleteListsAsync(client, "ul-deleted");
+        Assert.Null(Sync.FindFilm(4081));
     }
 
     [Fact]

@@ -13,7 +13,9 @@ namespace Jellyfin.HomeRows.Configuration;
 public interface IHomeRowConfigurationService
 {
     /// <summary>
-    /// Gets the layout that applies to a user.
+    /// Gets the layout that applies to a user. Fork: a layout from upstream sections or upstream's standard order also
+    /// gets the Saved row (<see cref="HomeRowProviderIds.UserList"/>, a fixed id) after its Movie discovery row or at the
+    /// end, unless it is full; it is added on read, never stored.
     /// </summary>
     /// <param name="user">The user.</param>
     /// <param name="ct">The cancellation token.</param>
@@ -98,8 +100,9 @@ public interface IHomeRowConfigurationService
     /// no title) to every stored layout, the users' and the admin default: right after its first Movie discovery row,
     /// or at the end when it has none. A layout that already has a user-list row, is full
     /// (<see cref="UpstreamHomeSectionMapper.MaxRows"/>) or doesn't parse is left as it is. A marker in the fork
-    /// database records that the insert ran, so a row the user removes later never comes back. Layouts that aren't
-    /// stored (the standard default and upstream sections) are never changed.
+    /// database records that the insert ran, so a row the user removes later never comes back. A full layout is
+    /// logged. Layouts that aren't stored (the standard default and upstream sections) get the Saved row at read time
+    /// instead (<see cref="GetEffectiveLayoutAsync"/>), never written.
     /// </summary>
     /// <param name="ct">The cancellation token.</param>
     /// <returns>True if the insert ran now, false if it had run before.</returns>

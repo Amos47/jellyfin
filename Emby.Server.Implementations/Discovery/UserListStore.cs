@@ -115,6 +115,69 @@ public sealed class UserListStore : IUserListStore, IDisposable
     }
 
     /// <inheritdoc />
+    public async Task<bool?> ToggleAsync(Guid userId, Guid listId, int tmdbId, string? imdbId, CancellationToken cancellationToken)
+    {
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                // The read and the write under one lock, so two toggles at once can't both add (or both remove).
+                if (!await OwnsAsync(context, userId, listId, cancellationToken).ConfigureAwait(false))
+                {
+                    return null;
+                }
+
+                var removed = await context.UserListItems
+                    .Where(i => i.ListId.Equals(listId) && i.TmdbId == tmdbId)
+                    .ExecuteDeleteAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                if (removed > 0)
+                {
+                    return false;
+                }
+
+                context.UserListItems.Add(new CustomUserListItem { ListId = listId, TmdbId = tmdbId, ImdbId = imdbId, AddedAt = DateTime.UtcNow });
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task RemoveUserAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                var listIds = context.UserLists.Where(l => l.UserId.Equals(userId)).Select(l => l.Id);
+
+                // The films first: ExecuteDelete doesn't rely on the database cascading.
+                await context.UserListItems
+                    .Where(i => listIds.Contains(i.ListId))
+                    .ExecuteDeleteAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                await context.UserLists
+                    .Where(l => l.UserId.Equals(userId))
+                    .ExecuteDeleteAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlySet<int>> GetListedTmdbIdsAsync(CancellationToken cancellationToken)
     {
         var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);

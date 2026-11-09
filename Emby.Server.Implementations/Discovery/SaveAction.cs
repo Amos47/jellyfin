@@ -83,16 +83,21 @@ public sealed class SaveAction : IItemActionProvider
         }
 
         var saved = await _lists.GetDefaultListAsync(user.Id, cancellationToken).ConfigureAwait(false);
-        var on = !saved.Contains(tmdbId);
-        if (on)
-        {
-            var imdbId = item.GetProviderId(MetadataProvider.Imdb);
-            await _lists.AddFilmAsync(user.Id, saved.Id, tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, cancellationToken).ConfigureAwait(false);
-        }
-        else
-        {
-            await _lists.RemoveFilmAsync(user.Id, saved.Id, tmdbId, cancellationToken).ConfigureAwait(false);
-        }
+        var imdbId = item.GetProviderId(MetadataProvider.Imdb);
+
+        // Under the film sync's lock, so a sync can't delete the film between the check and the save: a film that is
+        // gone by now (its list rotated out and the sync ran) isn't saved. The toggle itself is atomic in the store.
+        var on = await _filmSync.RunExclusiveAsync(
+            async () =>
+            {
+                if (!saved.Contains(tmdbId) && _filmSync.FindFilm(tmdbId) is null && _filmSync.FindOwned(user, tmdbId, null) is null)
+                {
+                    return false;
+                }
+
+                return await _lists.ToggleAsync(user.Id, saved.Id, tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, cancellationToken).ConfigureAwait(false) ?? false;
+            },
+            cancellationToken).ConfigureAwait(false);
 
         // The new state, even when the action is no longer offered (an owned film taken out of its last list), so
         // the app can show it until it reloads the actions.

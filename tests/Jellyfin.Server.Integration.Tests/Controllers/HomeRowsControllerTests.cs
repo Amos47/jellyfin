@@ -35,6 +35,7 @@ namespace Jellyfin.Server.Integration.Tests.Controllers
         ];
 
         // Upstream's standard home sections; latest media maps to one row per library, and the test server has none.
+        // Fork: the Saved row ends it.
         private static readonly string[] _standardOrder =
         [
             HomeRowProviderIds.LibraryTiles,
@@ -42,7 +43,8 @@ namespace Jellyfin.Server.Integration.Tests.Controllers
             HomeRowProviderIds.ResumeAudio,
             HomeRowProviderIds.ResumeBook,
             HomeRowProviderIds.LiveTv,
-            HomeRowProviderIds.NextUp
+            HomeRowProviderIds.NextUp,
+            HomeRowProviderIds.UserList
         ];
 
         private static string? _accessToken;

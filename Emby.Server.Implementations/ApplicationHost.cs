@@ -606,6 +606,7 @@ namespace Emby.Server.Implementations
             serviceCollection.AddSingleton<IItemActionProvider>(sp => sp.GetRequiredService<WatchTrailerAction>()); // Fork: discovery
             serviceCollection.AddSingleton<IDiscoveryListActionProvider>(sp => sp.GetRequiredService<WatchTrailerAction>()); // Fork: discovery
             serviceCollection.AddSingleton<IUserListStore, UserListStore>(); // Fork: discovery
+            serviceCollection.AddScoped<MediaBrowser.Controller.Events.IEventConsumer<Jellyfin.Data.Events.Users.UserDeletedEventArgs>, UserListsUserDeletedConsumer>(); // Fork: discovery
             serviceCollection.AddSingleton<IItemActionProvider, SaveAction>(); // Fork: discovery
             serviceCollection.AddSingleton<IRewatchCandidateFinder, RewatchCandidateFinder>();
             serviceCollection.AddSingleton<ITVSeriesManager, TVSeriesManager>();

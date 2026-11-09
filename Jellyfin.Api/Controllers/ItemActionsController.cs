@@ -87,13 +87,14 @@ public class ItemActionsController : BaseJellyfinApiController
 
     /// <summary>
     /// Performs an action on an item for the current user, such as flipping Save, and returns the action as it is now.
-    /// On a trailer it applies to the trailer's film.
+    /// On a trailer it applies to the trailer's film. A play-queue action (Watch trailer) is played, never performed: it
+    /// answers 400 on the film and on its trailer alike, though a trailer's action list leaves it out.
     /// </summary>
     /// <param name="itemId">The item id.</param>
     /// <param name="actionId">The action id.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <response code="200">Action performed; the updated action returned.</response>
-    /// <response code="400">The action can't be performed (it is only played, such as Watch trailer).</response>
+    /// <response code="400">The action can't be performed: a play-queue action such as Watch trailer, on a film or its trailer.</response>
     /// <response code="404">The item doesn't exist, the user may not see it, or the action doesn't apply to it.</response>
     /// <returns>The updated action.</returns>
     [HttpPost("{actionId}")]
@@ -111,14 +112,18 @@ public class ItemActionsController : BaseJellyfinApiController
         }
 
         var (user, item) = resolved;
-        var (target, isTrailer) = GetTarget(user, item);
+        var (target, _) = GetTarget(user, item);
 
         var provider = _providers.FirstOrDefault(p => string.Equals(p.Id, actionId, StringComparison.Ordinal));
         if (provider is null
-            || await provider.GetActionAsync(user, target, cancellationToken).ConfigureAwait(false) is not { } current
-            || (isTrailer && current.Kind == ItemAction.PlayQueueKind))
+            || await provider.GetActionAsync(user, target, cancellationToken).ConfigureAwait(false) is not { } current)
         {
             return NotFound();
+        }
+
+        if (current.Kind == ItemAction.PlayQueueKind)
+        {
+            return BadRequest("A play-queue action is played, not performed.");
         }
 
         // Not the request's token: once performed, the change stands even if the client hangs up.
