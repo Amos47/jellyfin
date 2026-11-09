@@ -47,4 +47,16 @@ public interface IItemActionProvider
     /// <returns>The entries, in the order of <see cref="GetQueueAsync"/>.</returns>
     async Task<IReadOnlyList<QueueEntry>> GetQueueEntriesAsync(User user, BaseItem item, CancellationToken cancellationToken)
         => (await GetQueueAsync(user, item, cancellationToken).ConfigureAwait(false)).Select(id => new QueueEntry(id, null, null)).ToList();
+
+    /// <summary>
+    /// Gets the entries to play, as <see cref="GetQueueEntriesAsync(User, BaseItem, CancellationToken)"/> does, with the
+    /// list the user started from (a list page, or a film opened from one). The default ignores the list.
+    /// </summary>
+    /// <param name="user">The user.</param>
+    /// <param name="item">The item, already checked to be visible to the user.</param>
+    /// <param name="listId">The id of the discovery list the queue was started from, or null.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The entries.</returns>
+    Task<IReadOnlyList<QueueEntry>> GetQueueEntriesAsync(User user, BaseItem item, string? listId, CancellationToken cancellationToken)
+        => GetQueueEntriesAsync(user, item, cancellationToken);
 }

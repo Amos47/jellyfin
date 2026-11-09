@@ -26,6 +26,7 @@ GET /Artists/{name}  # by-name
 GET /Channels  # not-movies: channel folders
 GET /Channels/Items/Latest  # not-movies: channel items only
 GET /Channels/{channelId}/Items  # not-movies: channel items only
+GET /Discovery/Lists/{listId}/Page  # by-id: one discovery list's page, by list id; its discovery films show by design, like a movie-discovery home row (UserDiscoveryTests)
 GET /Genres  # hidden: Genres_Studios_Persons_Exclude
 GET /Genres/{genreName}  # by-name: its MovieCount leaves discovery films out (Genres_Studios_Persons_Exclude)
 GET /HomeRows/{rowId}/Items  # hidden: every provider but movie-discovery (OtherHomeRows_Exclude); movie-discovery rows show them by design (HomeRowsDiscoveryTests)

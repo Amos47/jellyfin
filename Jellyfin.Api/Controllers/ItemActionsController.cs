@@ -79,6 +79,10 @@ public class ItemActionsController : BaseJellyfinApiController
     /// </summary>
     /// <param name="itemId">The item id.</param>
     /// <param name="actionId">The action id.</param>
+    /// <param name="listId">
+    /// Optional: the discovery list the queue is started from (its page, or a film opened from it). When the item is
+    /// one of that list's playable films, Watch trailer goes on through that list; otherwise it is ignored.
+    /// </param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <response code="200">Queue returned.</response>
     /// <response code="404">The item doesn't exist, the user may not see it, or the action doesn't apply to it.</response>
@@ -89,6 +93,7 @@ public class ItemActionsController : BaseJellyfinApiController
     public async Task<ActionResult<ItemActionQueueDto>> GetQueue(
         [FromRoute, Required] Guid itemId,
         [FromRoute, Required] string actionId,
+        [FromQuery] string? listId,
         CancellationToken cancellationToken)
     {
         if (Resolve(itemId) is not { } resolved)
@@ -105,11 +110,19 @@ public class ItemActionsController : BaseJellyfinApiController
             return NotFound();
         }
 
-        var queue = await provider.GetQueueEntriesAsync(user, item, cancellationToken).ConfigureAwait(false);
-        return Ok(new ItemActionQueueDto(
-            queue.Select(e => e.Id).ToArray(),
-            queue.Select(e => new ItemActionQueueItemDto(e.Id, e.Title, e.Subtitle)).ToArray()));
+        var queue = await provider.GetQueueEntriesAsync(user, item, listId, cancellationToken).ConfigureAwait(false);
+        return Ok(ToQueueDto(queue));
     }
+
+    /// <summary>
+    /// Builds the queue DTO of a queue's entries.
+    /// </summary>
+    /// <param name="queue">The entries, in play order.</param>
+    /// <returns>The DTO.</returns>
+    internal static ItemActionQueueDto ToQueueDto(IReadOnlyList<QueueEntry> queue)
+        => new(
+            queue.Select(e => e.Id).ToArray(),
+            queue.Select(e => new ItemActionQueueItemDto(e.Id, e.Title, e.Subtitle, e.FilmId)).ToArray());
 
     // The item as the detail endpoint resolves it for the user, so a hidden or restricted item is a 404 here too.
     private (User User, BaseItem Item)? Resolve(Guid itemId)

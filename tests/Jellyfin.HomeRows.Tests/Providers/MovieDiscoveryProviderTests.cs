@@ -352,4 +352,24 @@ public class MovieDiscoveryProviderTests
         Assert.Equal(1, result.TotalRecordCount);
         Assert.Empty(_shown);
     }
+
+    [Fact]
+    public async Task DerivedRows_CarryPageListId()
+    {
+        var a = List("a", 5);
+        var b = List("b", 6);
+        var provider = CreateProvider([a], [b]);
+        SetRowItems(a, Item(5));
+        SetRowItems(b, Item(6));
+
+        var derived = await provider.GetItemsAsync(Context("b"), new JsonObject(), new HomeRowPaging(0, 20), Ct);
+        var parent = await provider.GetItemsAsync(Context(null), new JsonObject(), new HomeRowPaging(0, 20), Ct);
+        var gone = await provider.GetItemsAsync(Context(HomeSubRow.UnknownKey), new JsonObject(), new HomeRowPaging(0, 20), Ct);
+
+        // Each row names the list page it opens; the card style is unchanged.
+        Assert.Equal("b", derived.Presentation.PageListId);
+        Assert.Equal(HomeRowCardShape.Poster, derived.Presentation.CardShape);
+        Assert.Equal("a", parent.Presentation.PageListId);
+        Assert.Null(gone.Presentation.PageListId);
+    }
 }

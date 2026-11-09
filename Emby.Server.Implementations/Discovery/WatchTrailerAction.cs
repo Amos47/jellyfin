@@ -19,19 +19,28 @@ namespace Emby.Server.Implementations.Discovery;
 /// without a trailer of its own uses the trailers of its hidden discovery copy (same TMDB id, or the same IMDb id when
 /// the film has no TMDB id), so a list's owned films play a trailer too. Only the action does this: the upstream
 /// LocalTrailerCount and LocalTrailers stay the film's own.
+/// <para>On a list page it is Watch trailers: the trailers of every playable film of the list, in list order. A film
+/// queue asked for with a list (a film opened from a list page) goes on through that list instead of today's picks.
+/// Every entry names the film it belongs to: the owned film when the user owns it, else the discovery copy.</para>
 /// </summary>
-public sealed class WatchTrailerAction : IItemActionProvider
+public sealed class WatchTrailerAction : IItemActionProvider, IDiscoveryListActionProvider
 {
     /// <summary>
     /// The action id.
     /// </summary>
     public const string ActionId = "watch-trailer";
 
+    /// <summary>
+    /// The list action id.
+    /// </summary>
+    public const string ListId = "watch-trailers";
+
     private static readonly ExtraType[] _trailerTypes = [ExtraType.Trailer];
 
     private readonly IDiscoveryUserPicks _picks;
     private readonly IDiscoveryRowPlanner _planner;
     private readonly IDiscoveryFilmSync _filmSync;
+    private readonly IDiscoveryStore _store;
     private readonly ILogger<WatchTrailerAction> _logger;
 
     /// <summary>
@@ -40,17 +49,22 @@ public sealed class WatchTrailerAction : IItemActionProvider
     /// <param name="picks">The user's daily discovery picks.</param>
     /// <param name="planner">The discovery row planner.</param>
     /// <param name="filmSync">The discovery film sync, to find an owned film's hidden copy.</param>
+    /// <param name="store">The discovery store, for the list a queue was started from.</param>
     /// <param name="logger">The logger.</param>
-    public WatchTrailerAction(IDiscoveryUserPicks picks, IDiscoveryRowPlanner planner, IDiscoveryFilmSync filmSync, ILogger<WatchTrailerAction> logger)
+    public WatchTrailerAction(IDiscoveryUserPicks picks, IDiscoveryRowPlanner planner, IDiscoveryFilmSync filmSync, IDiscoveryStore store, ILogger<WatchTrailerAction> logger)
     {
         _picks = picks;
         _planner = planner;
         _filmSync = filmSync;
+        _store = store;
         _logger = logger;
     }
 
     /// <inheritdoc />
     public string Id => ActionId;
+
+    /// <inheritdoc />
+    public string ListActionId => ListId;
 
     /// <inheritdoc />
     public Task<ItemAction?> GetActionAsync(User user, BaseItem item, CancellationToken cancellationToken)
@@ -69,10 +83,23 @@ public sealed class WatchTrailerAction : IItemActionProvider
         => (await GetQueueEntriesAsync(user, item, cancellationToken).ConfigureAwait(false)).Select(e => e.Id).ToList();
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<QueueEntry>> GetQueueEntriesAsync(User user, BaseItem item, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<QueueEntry>> GetQueueEntriesAsync(User user, BaseItem item, CancellationToken cancellationToken)
+        => GetQueueEntriesAsync(user, item, null, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<QueueEntry>> GetQueueEntriesAsync(User user, BaseItem item, string? listId, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(item);
+
+        // Started from a list (its page, or a film opened from it): the queue goes on through that list's playable
+        // films, the ones its page shows. A film that isn't one of them gets the queue it would get without a list.
+        if (!string.IsNullOrEmpty(listId)
+            && await _store.GetListAsync(listId, cancellationToken).ConfigureAwait(false) is { } startList
+            && GetFrom(user, _planner.GetRowItems(user, startList, true), item) is { } fromList)
+        {
+            return fromList;
+        }
 
         // The same day the Movie discovery rows use: the server's local date.
         var today = DateOnly.FromDateTime(DateTime.Now);
@@ -85,32 +112,82 @@ public sealed class WatchTrailerAction : IItemActionProvider
         {
             // The film's own trailers still play when the user's picks can't be worked out.
             _logger.LogWarning(ex, "Could not get the discovery picks of user {UserId}; queueing only the trailers of {ItemId}", user.Id, item.Id);
-            return GetEntries(user, item);
+            return GetEntries(user, item, filmId: GetFilmId(user, item));
         }
 
         foreach (var list in lists)
         {
             // The row items are the films as the user sees them: owned or visible only.
-            var films = _planner.GetRowItems(user, list);
-            var index = films.ToList().FindIndex(f => f.Item.Id.Equals(item.Id));
-            if (index >= 0)
+            if (GetFrom(user, _planner.GetRowItems(user, list), item) is { } fromPick)
             {
-                // The list's TMDB id: an owned row item comes from a light query without its provider ids.
-                return films.Skip(index).SelectMany(f => GetEntries(user, f.Item, f.Film.TmdbId)).ToList();
+                return fromPick;
             }
         }
 
-        return GetEntries(user, item);
+        return GetEntries(user, item, filmId: GetFilmId(user, item));
     }
 
-    // The trailers of a film, each named after the film: the row item is the owned film when the user owns it (even
-    // when the trailer is its hidden copy's), else the discovery copy.
-    private List<QueueEntry> GetEntries(User user, BaseItem film, int? tmdbId = null)
+    /// <inheritdoc />
+    public Task<ItemAction?> GetListActionAsync(User user, DiscoveryList list, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(user);
+        ArgumentNullException.ThrowIfNull(list);
+
+        // Shown when any playable film of the list has a trailer to play.
+        var playable = _planner.GetRowItems(user, list, true);
+        ItemAction? action = playable.Any(f => GetTrailerIds(user, f.Item, f.Film.TmdbId).Count > 0)
+            ? new ItemAction(ListId, "Watch trailers", "trailer", ItemAction.PlayQueueKind)
+            : null;
+        return Task.FromResult(action);
+    }
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<QueueEntry>> GetListQueueEntriesAsync(User user, DiscoveryList list, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(user);
+        ArgumentNullException.ThrowIfNull(list);
+
+        // The list page's films (the playable ones), in list order.
+        IReadOnlyList<QueueEntry> entries = GetEntries(user, _planner.GetRowItems(user, list, true));
+        return Task.FromResult(entries);
+    }
+
+    // The entries from the item on, when it is one of the films; else null.
+    private List<QueueEntry>? GetFrom(User user, IReadOnlyList<DiscoveryRowItem> films, BaseItem item)
+    {
+        var index = films.ToList().FindIndex(f => f.Item.Id.Equals(item.Id));
+        return index >= 0 ? GetEntries(user, films.Skip(index)) : null;
+    }
+
+    // The list's TMDB id: an owned row item comes from a light query without its provider ids. The row item is the
+    // film the entries belong to: the owned film when the user owns it, else the discovery copy.
+    private List<QueueEntry> GetEntries(User user, IEnumerable<DiscoveryRowItem> films)
+        => films.SelectMany(f => GetEntries(user, f.Item, f.Film.TmdbId, f.Item.Id)).ToList();
+
+    // The trailers of a film, each named after the film (even when the trailer is its hidden copy's).
+    private List<QueueEntry> GetEntries(User user, BaseItem film, int? tmdbId = null, Guid? filmId = null)
     {
         var subtitle = film.ProductionYear is { } year
             ? string.Create(CultureInfo.InvariantCulture, $"Trailer \u00b7 {year}")
             : "Trailer";
-        return GetTrailerIds(user, film, tmdbId).Select(id => new QueueEntry(id, film.Name, subtitle)).ToList();
+        var owner = filmId ?? film.Id;
+        return GetTrailerIds(user, film, tmdbId).Select(id => new QueueEntry(id, film.Name, subtitle, owner)).ToList();
+    }
+
+    // The film a queue of the item's own trailers belongs to: the item, unless it is the discovery copy of a film the
+    // user owns, in which case the owned film wins.
+    private Guid GetFilmId(User user, BaseItem item)
+    {
+        if (item is Movie
+            && int.TryParse(item.GetProviderId(MetadataProvider.Tmdb), NumberStyles.None, CultureInfo.InvariantCulture, out var tmdbId)
+            && _filmSync.FindFilm(tmdbId) is { } copy
+            && copy.Id.Equals(item.Id)
+            && _filmSync.FindOwned(user, tmdbId, item.GetProviderId(MetadataProvider.Imdb)) is { } owned)
+        {
+            return owned.Id;
+        }
+
+        return item.Id;
     }
 
     private IReadOnlyList<Guid> GetTrailerIds(User user, BaseItem item, int? tmdbId = null)

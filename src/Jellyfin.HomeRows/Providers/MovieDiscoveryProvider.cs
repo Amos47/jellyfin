@@ -15,7 +15,8 @@ namespace Jellyfin.HomeRows.Providers;
 /// Fork: Movie discovery. Expands into one row per discovery list picked for the user today, each titled with the
 /// list's title. Which lists and films are shown is decided by <see cref="IDiscoveryRowPlanner"/>, with the row's
 /// <c>requireTrailer</c> and <c>minReadyFilms</c> rules (<see cref="GetPickRules"/>). A sub-row's key is
-/// its list id, so a derived row id always serves the same list, even after the day's picks change.
+/// its list id, so a derived row id always serves the same list, even after the day's picks change. A row that serves a
+/// list names it in <see cref="HomeRowPresentation.PageListId"/>, so clients can open the list's page.
 /// </summary>
 public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
 {
@@ -157,7 +158,9 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
         }
 
         var dtos = _adapter.ToDtos(page.Select(i => i.Item).ToArray<BaseItem>(), context);
-        return new HomeRowResult(dtos, items.Count, presentation) { Title = list.Title };
+
+        // The row opens its list's page (title and See all).
+        return new HomeRowResult(dtos, items.Count, presentation with { PageListId = list.Id }) { Title = list.Title };
     }
 
     /// <summary>

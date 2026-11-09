@@ -602,7 +602,9 @@ namespace Emby.Server.Implementations
             serviceCollection.AddSingleton<IDiscoveryFilmSync, DiscoveryFilmSync>(); // Fork: discovery
             serviceCollection.AddSingleton<IDiscoveryTrailers, DiscoveryTrailers>(); // Fork: discovery
             serviceCollection.AddSingleton<IDiscoveryRowPlanner, DiscoveryRowPlanner>(); // Fork: discovery
-            serviceCollection.AddSingleton<IItemActionProvider, WatchTrailerAction>(); // Fork: discovery
+            serviceCollection.AddSingleton<WatchTrailerAction>(); // Fork: discovery
+            serviceCollection.AddSingleton<IItemActionProvider>(sp => sp.GetRequiredService<WatchTrailerAction>()); // Fork: discovery
+            serviceCollection.AddSingleton<IDiscoveryListActionProvider>(sp => sp.GetRequiredService<WatchTrailerAction>()); // Fork: discovery
             serviceCollection.AddSingleton<IRewatchCandidateFinder, RewatchCandidateFinder>();
             serviceCollection.AddSingleton<ITVSeriesManager, TVSeriesManager>();
 

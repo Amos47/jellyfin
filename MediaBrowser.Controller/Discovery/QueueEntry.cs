@@ -8,4 +8,8 @@ namespace MediaBrowser.Controller.Discovery;
 /// <param name="Id">The item id.</param>
 /// <param name="Title">The title to show, or null to use the item's own name.</param>
 /// <param name="Subtitle">The line under the title, or null.</param>
-public record QueueEntry(Guid Id, string? Title, string? Subtitle);
+/// <param name="FilmId">
+/// The film the entry belongs to (for a trailer: the user's owned film when they own it, else the discovery copy), or
+/// null when it isn't known. A player closes onto this film's page.
+/// </param>
+public record QueueEntry(Guid Id, string? Title, string? Subtitle, Guid? FilmId = null);
