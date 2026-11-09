@@ -336,6 +336,87 @@ public sealed class DiscoveryRowPlannerTests : IDisposable
     }
 
     [Fact]
+    public async Task Picks_FewerGroupsThanMaxRows_FreezesOnceAllCanBePicked()
+    {
+        Film(1, trailer: true);
+        Film(2);
+        var lists = new[] { List("a", 1), List("b", 2) };
+        SetLists(lists);
+        var rules = new DiscoveryPickRules(true, 1);
+
+        // Two lists can never fill three rows: one ready is not enough to save.
+        Assert.Single(await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct));
+        Assert.Empty(_snapshots);
+
+        // Both ready: every list that can be picked is, so the pick is saved.
+        AddTrailer(2);
+        _planner.InvalidateReadiness();
+        var both = await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct);
+        var expected = DiscoveryPicker.Pick(_user.Id, _day, lists, 10, null).Select(l => l.Id).ToArray();
+        Assert.Equal(expected, both.Select(l => l.Id));
+        Assert.Equal(expected, _snapshots[(_user.Id, _day)]);
+    }
+
+    [Fact]
+    public async Task Picks_Capacity_CountsEachGroupOnce_UngroupedListsEach()
+    {
+        Film(1, trailer: true);
+        Film(2);
+        var lists = new[]
+        {
+            new DiscoveryList("g-1", "G1", "tests", [new DiscoveryFilmRef(1, null)], "g"),
+            new DiscoveryList("g-2", "G2", "tests", [new DiscoveryFilmRef(1, null)], "g"),
+            new DiscoveryList("blank", "B", "tests", [new DiscoveryFilmRef(2, null)], " "),
+        };
+        SetLists(lists);
+        var rules = new DiscoveryPickRules(true, 1);
+
+        // Capacity 2 (group "g" plus the blank-group list): one group ready is not enough.
+        Assert.Single(await _planner.GetPickedListsAsync(_user, 5, rules, _day, Ct));
+        Assert.Empty(_snapshots);
+
+        AddTrailer(2);
+        _planner.InvalidateReadiness();
+        Assert.Equal(2, (await _planner.GetPickedListsAsync(_user, 5, rules, _day, Ct)).Count);
+        Assert.Equal(2, _snapshots[(_user.Id, _day)].Count);
+    }
+
+    [Fact]
+    public async Task Picks_NoLists_NothingSaved()
+    {
+        SetLists();
+
+        Assert.Empty(await _planner.GetPickedListsAsync(_user, 3, new DiscoveryPickRules(true, 1), _day, Ct));
+        Assert.Empty(_snapshots);
+    }
+
+    [Fact]
+    public async Task Picks_InvalidatedWhileCounting_ResultNotReused()
+    {
+        Film(1, trailer: true);
+        Film(2);
+        SetLists(List("b", 2), List("a", 1));
+        var rules = new DiscoveryPickRules(true, 1);
+
+        // A trailer lands while readiness is being counted (after "b" was counted): the count is stale and must not be served from the cache.
+        var invalidated = false;
+        _sync.Setup(s => s.FindFilm(It.IsAny<int>())).Returns<int>(id =>
+        {
+            if (id == 1 && !invalidated)
+            {
+                invalidated = true;
+                AddTrailer(2);
+                _planner.InvalidateReadiness();
+            }
+
+            return _films.GetValueOrDefault(id);
+        });
+
+        Assert.Single(await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct));
+        Assert.Equal(2, (await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct)).Count);
+    }
+
+    [Fact]
     public async Task Picks_ReadinessCached_NoRecountWithinLifetime_InvalidatedByReshuffle()
     {
         Film(1, trailer: true);
@@ -365,7 +446,10 @@ public sealed class DiscoveryRowPlannerTests : IDisposable
     {
         Film(1, trailer: true);
         Film(2);
-        var lists = new[] { List("a", 1), List("b", 2) };
+        Film(3);
+
+        // Lists "c" and "d" never become ready, so the pick never fills three rows and is never saved.
+        var lists = new[] { List("a", 1), List("b", 2), List("c", 3), List("d", 3) };
         SetLists(lists);
         var rules = new DiscoveryPickRules(true, 1);
         Assert.Single(await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct));

@@ -91,10 +91,12 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
         var salt = await _store.GetPickSaltAsync(day, cancellationToken).ConfigureAwait(false);
         var picked = GetReadyPick(user, lists, rules.MinReadyFilms, day, salt, cancellationToken);
 
-        // Only a pick that fills maxRows is saved (in full, so any maxRows reads a prefix of it). A smaller one, empty
-        // included, is worked out again on later reads (through the readiness cache), so lists that become ready
-        // later that day still join it until it is full.
-        if (picked.Count >= maxRows)
+        // Only a full pick is saved (in full, so any maxRows reads a prefix of it): one that fills maxRows, or every
+        // row the stored lists can ever give when that is fewer (one per group, one per ungrouped list). A smaller
+        // one, empty included, is worked out again on later reads (through the readiness cache), so lists that become
+        // ready later that day still join it until it is full.
+        var full = Math.Min(maxRows, GetCapacity(lists));
+        if (full > 0 && picked.Count >= full)
         {
             picked = await _store.AddPickSnapshotAsync(user.Id, day, salt, picked, cancellationToken).ConfigureAwait(false);
         }
@@ -146,7 +148,8 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
     /// <inheritdoc />
     public void InvalidateReadiness()
     {
-        // The generation goes first, so a count that started before this is not stored after the clear.
+        // Entries carry the generation they were counted in; reads ignore older ones, so a count that started before
+        // this is never served after it.
         Interlocked.Increment(ref _generation);
         _readiness.Clear();
     }
@@ -158,24 +161,28 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
             .Take(maxRows)
             .ToList();
 
+    // The most lists a pick can hold: every list with no group, plus one per distinct group.
+    private static int GetCapacity(IReadOnlyList<DiscoveryList> lists)
+        => lists.Count(l => string.IsNullOrWhiteSpace(l.Group))
+            + lists.Where(l => !string.IsNullOrWhiteSpace(l.Group)).Select(l => l.Group).Distinct(StringComparer.Ordinal).Count();
+
     private IReadOnlyList<string> GetReadyPick(User user, IReadOnlyList<DiscoveryList> lists, int minReadyFilms, DateOnly day, string? salt, CancellationToken cancellationToken)
     {
         var key = new ReadinessKey(user.Id, day, salt ?? string.Empty, minReadyFilms);
         var now = _time.GetUtcNow();
-        if (_readiness.TryGetValue(key, out var cached) && cached.Expires > now)
+        // An entry from before the last invalidation is ignored, even one written after it by a count that started
+        // before it, so there is no gap between checking the generation and writing the entry.
+        var current = Interlocked.Read(ref _generation);
+        if (_readiness.TryGetValue(key, out var cached) && cached.Expires > now && cached.Generation == current)
         {
             return cached.ListIds;
         }
 
-        var generation = Interlocked.Read(ref _generation);
-        var picked = PickReady(user, lists, minReadyFilms, day, salt, cancellationToken);
-        if (Interlocked.Read(ref _generation) == generation)
+        var picked = PickReady(user, lists, minReadyFilms, day, salt, cancellationToken).AsReadOnly();
+        _readiness[key] = new ReadinessEntry(picked, now + ReadinessLifetime, current);
+        foreach (var stale in _readiness.Where(e => e.Value.Expires <= now || e.Value.Generation < current).ToList())
         {
-            _readiness[key] = new ReadinessEntry(picked, now + ReadinessLifetime);
-            foreach (var expired in _readiness.Where(e => e.Value.Expires <= now).ToList())
-            {
-                _readiness.TryRemove(expired);
-            }
+            _readiness.TryRemove(stale);
         }
 
         return picked;
@@ -252,5 +259,5 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
 
     private readonly record struct ReadinessKey(Guid UserId, DateOnly Day, string Salt, int MinReadyFilms);
 
-    private sealed record ReadinessEntry(IReadOnlyList<string> ListIds, DateTimeOffset Expires);
+    private sealed record ReadinessEntry(IReadOnlyList<string> ListIds, DateTimeOffset Expires, long Generation);
 }
