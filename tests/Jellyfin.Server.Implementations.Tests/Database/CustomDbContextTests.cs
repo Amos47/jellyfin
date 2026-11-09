@@ -55,7 +55,7 @@ public sealed class CustomDbContextTests : IDisposable
         added.Remove("__EFMigrationsLock");
 
         Assert.Equal(
-            new HashSet<string> { "CustomDiscoveryLists", "CustomDiscoveryPickSalts", "CustomDiscoveryPickSnapshots", "CustomDiscoveryShown", "CustomHomeRowConfigurations", "CustomHomeRowDefaults", "CustomMarkers", "CustomUserListItems", "CustomUserLists", "__CustomMigrationsHistory" },
+            new HashSet<string> { "CustomDiscoveryLists", "CustomDiscoveryPickSalts", "CustomDiscoveryRequests", "CustomDiscoveryRequestUsers", "CustomDiscoverySettings", "CustomDiscoveryPickSnapshots", "CustomDiscoveryShown", "CustomHomeRowConfigurations", "CustomHomeRowDefaults", "CustomMarkers", "CustomUserListItems", "CustomUserLists", "__CustomMigrationsHistory" },
             added);
         Assert.Equal(historyRowsBefore, await CountHistoryRowsAsync());
     }

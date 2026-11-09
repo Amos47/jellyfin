@@ -83,6 +83,56 @@ namespace Jellyfin.Custom.Database.Migrations
                     b.ToTable("CustomDiscoveryPickSnapshots", (string)null);
                 });
 
+            modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomDiscoveryRequest", b =>
+                {
+                    b.Property<int>("TmdbId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("TmdbId");
+
+                    b.HasIndex("State");
+
+                    b.ToTable("CustomDiscoveryRequests", (string)null);
+                });
+
+            modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomDiscoveryRequestUser", b =>
+                {
+                    b.Property<int>("TmdbId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("TmdbId", "UserId");
+
+                    b.HasIndex("UserId");
+
+                    b.ToTable("CustomDiscoveryRequestUsers", (string)null);
+                });
+
+            modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomDiscoverySetting", b =>
+                {
+                    b.Property<string>("Key")
+                        .HasMaxLength(100)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("Value")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("Key");
+
+                    b.ToTable("CustomDiscoverySettings", (string)null);
+                });
+
             modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomDiscoveryShown", b =>
                 {
                     b.Property<int>("TmdbId")
@@ -202,6 +252,15 @@ namespace Jellyfin.Custom.Database.Migrations
                     b.ToTable("CustomUserListItems", (string)null);
                 });
 
+            modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomDiscoveryRequestUser", b =>
+                {
+                    b.HasOne("Jellyfin.Custom.Database.Entities.CustomDiscoveryRequest", null)
+                        .WithMany("Users")
+                        .HasForeignKey("TmdbId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomUserListItem", b =>
                 {
                     b.HasOne("Jellyfin.Custom.Database.Entities.CustomUserList", null)
@@ -209,6 +268,11 @@ namespace Jellyfin.Custom.Database.Migrations
                         .HasForeignKey("ListId")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
+                });
+
+            modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomDiscoveryRequest", b =>
+                {
+                    b.Navigation("Users");
                 });
 
             modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomUserList", b =>

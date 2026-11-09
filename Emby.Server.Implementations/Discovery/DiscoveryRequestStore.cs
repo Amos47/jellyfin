@@ -1,0 +1,250 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Jellyfin.Custom.Database;
+using Jellyfin.Custom.Database.Entities;
+using MediaBrowser.Controller.Discovery;
+using Microsoft.EntityFrameworkCore;
+
+namespace Emby.Server.Implementations.Discovery;
+
+/// <summary>
+/// Fork: keeps the download requests of discovery films, and the downloads setting, in <see cref="CustomDbContext"/>.
+/// </summary>
+public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
+{
+    private const string DownloadsEnabledKey = "downloads-enabled";
+
+    private readonly IDbContextFactory<CustomDbContext> _dbFactory;
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
+
+    // Read on every film's actions, so kept once read; only this store writes it.
+    private bool? _downloadsEnabled;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DiscoveryRequestStore"/> class.
+    /// </summary>
+    /// <param name="dbFactory">The fork db context factory.</param>
+    public DiscoveryRequestStore(IDbContextFactory<CustomDbContext> dbFactory)
+    {
+        _dbFactory = dbFactory;
+    }
+
+    /// <inheritdoc />
+    public void Dispose() => _writeLock.Dispose();
+
+    /// <inheritdoc />
+    public async Task<DiscoveryRequest?> GetAsync(int tmdbId, CancellationToken cancellationToken)
+    {
+        var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using (context.ConfigureAwait(false))
+        {
+            var entity = await context.DiscoveryRequests
+                .AsNoTracking()
+                .Include(r => r.Users)
+                .FirstOrDefaultAsync(r => r.TmdbId == tmdbId, cancellationToken)
+                .ConfigureAwait(false);
+            return entity is null ? null : ToModel(entity);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<DiscoveryRequest>> GetAllAsync(string? state, CancellationToken cancellationToken)
+    {
+        var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using (context.ConfigureAwait(false))
+        {
+            var query = context.DiscoveryRequests.AsNoTracking().Include(r => r.Users).AsQueryable();
+            if (state is not null)
+            {
+                query = query.Where(r => r.State == state);
+            }
+
+            var entities = await query.ToListAsync(cancellationToken).ConfigureAwait(false);
+            return entities
+                .OrderByDescending(r => r.UpdatedAt)
+                .ThenBy(r => r.TmdbId)
+                .Select(ToModel)
+                .ToList();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<DiscoveryRequest> RequestAsync(int tmdbId, Guid userId, CancellationToken cancellationToken)
+    {
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                var entity = await context.DiscoveryRequests
+                    .Include(r => r.Users)
+                    .FirstOrDefaultAsync(r => r.TmdbId == tmdbId, cancellationToken)
+                    .ConfigureAwait(false);
+                var now = DateTime.UtcNow;
+                if (entity is null)
+                {
+                    entity = new CustomDiscoveryRequest { TmdbId = tmdbId, State = DiscoveryRequest.StateRequested, UpdatedAt = now };
+                    context.DiscoveryRequests.Add(entity);
+                }
+                else if (entity.State is DiscoveryRequest.StateFailed or DiscoveryRequest.StateDone)
+                {
+                    // Asked for again: the app retries a failed one, and a done film that left the library is fetched again.
+                    entity.State = DiscoveryRequest.StateRequested;
+                    entity.UpdatedAt = now;
+                }
+
+                if (!entity.Users.Any(u => u.UserId.Equals(userId)))
+                {
+                    entity.Users.Add(new CustomDiscoveryRequestUser { TmdbId = tmdbId, UserId = userId });
+                }
+
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                return ToModel(entity);
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<DiscoveryRequest?> SetStateAsync(int tmdbId, string state, CancellationToken cancellationToken)
+    {
+        if (!DiscoveryRequest.IsState(state))
+        {
+            throw new ArgumentException("Unknown request state: " + state, nameof(state));
+        }
+
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                var entity = await context.DiscoveryRequests
+                    .Include(r => r.Users)
+                    .FirstOrDefaultAsync(r => r.TmdbId == tmdbId, cancellationToken)
+                    .ConfigureAwait(false);
+                if (entity is null)
+                {
+                    return null;
+                }
+
+                if (!string.Equals(entity.State, state, StringComparison.Ordinal))
+                {
+                    entity.State = state;
+                    entity.UpdatedAt = DateTime.UtcNow;
+                    await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                }
+
+                return ToModel(entity);
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlySet<int>> GetActiveTmdbIdsAsync(CancellationToken cancellationToken)
+    {
+        var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using (context.ConfigureAwait(false))
+        {
+            var ids = await context.DiscoveryRequests
+                .AsNoTracking()
+                .Where(r => r.State != DiscoveryRequest.StateDone)
+                .Select(r => r.TmdbId)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return ids.ToHashSet();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task RemoveUserAsync(Guid userId, CancellationToken cancellationToken)
+    {
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                await context.DiscoveryRequestUsers
+                    .Where(u => u.UserId.Equals(userId))
+                    .ExecuteDeleteAsync(cancellationToken)
+                    .ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> GetDownloadsEnabledAsync(CancellationToken cancellationToken)
+    {
+        if (_downloadsEnabled is { } enabled)
+        {
+            return enabled;
+        }
+
+        var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using (context.ConfigureAwait(false))
+        {
+            var value = await context.DiscoverySettings
+                .AsNoTracking()
+                .Where(s => s.Key == DownloadsEnabledKey)
+                .Select(s => s.Value)
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+            enabled = bool.TryParse(value, out var parsed) && parsed;
+        }
+
+        _downloadsEnabled ??= enabled;
+        return _downloadsEnabled.Value;
+    }
+
+    /// <inheritdoc />
+    public async Task SetDownloadsEnabledAsync(bool enabled, CancellationToken cancellationToken)
+    {
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                var value = enabled.ToString(CultureInfo.InvariantCulture);
+                var setting = await context.DiscoverySettings
+                    .FirstOrDefaultAsync(s => s.Key == DownloadsEnabledKey, cancellationToken)
+                    .ConfigureAwait(false);
+                if (setting is null)
+                {
+                    context.DiscoverySettings.Add(new CustomDiscoverySetting { Key = DownloadsEnabledKey, Value = value });
+                }
+                else
+                {
+                    setting.Value = value;
+                }
+
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                _downloadsEnabled = enabled;
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    private static DiscoveryRequest ToModel(CustomDiscoveryRequest entity)
+        => new(entity.TmdbId, entity.State, entity.UpdatedAt, entity.Users.Select(u => u.UserId).ToArray());
+}

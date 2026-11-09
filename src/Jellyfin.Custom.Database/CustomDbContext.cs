@@ -60,6 +60,21 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
     /// </summary>
     public DbSet<CustomMarker> Markers => Set<CustomMarker>();
 
+    /// <summary>
+    /// Gets the download requests of discovery films.
+    /// </summary>
+    public DbSet<CustomDiscoveryRequest> DiscoveryRequests => Set<CustomDiscoveryRequest>();
+
+    /// <summary>
+    /// Gets the users who asked for each download.
+    /// </summary>
+    public DbSet<CustomDiscoveryRequestUser> DiscoveryRequestUsers => Set<CustomDiscoveryRequestUser>();
+
+    /// <summary>
+    /// Gets the server-wide discovery settings.
+    /// </summary>
+    public DbSet<CustomDiscoverySetting> DiscoverySettings => Set<CustomDiscoverySetting>();
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -134,6 +149,30 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
             entity.ToTable("CustomMarkers");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).HasMaxLength(100).ValueGeneratedNever();
+        });
+
+        modelBuilder.Entity<CustomDiscoveryRequest>(entity =>
+        {
+            entity.ToTable("CustomDiscoveryRequests");
+            entity.HasKey(e => e.TmdbId);
+            entity.Property(e => e.TmdbId).ValueGeneratedNever();
+            entity.Property(e => e.State).HasMaxLength(32);
+            entity.HasIndex(e => e.State);
+            entity.HasMany(e => e.Users).WithOne().HasForeignKey(u => u.TmdbId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<CustomDiscoveryRequestUser>(entity =>
+        {
+            entity.ToTable("CustomDiscoveryRequestUsers");
+            entity.HasKey(e => new { e.TmdbId, e.UserId });
+            entity.HasIndex(e => e.UserId);
+        });
+
+        modelBuilder.Entity<CustomDiscoverySetting>(entity =>
+        {
+            entity.ToTable("CustomDiscoverySettings");
+            entity.HasKey(e => e.Key);
+            entity.Property(e => e.Key).HasMaxLength(100).ValueGeneratedNever();
         });
     }
 }

@@ -10,7 +10,9 @@ namespace MediaBrowser.Controller.Discovery;
 /// <param name="Icon">The icon name the apps map to a symbol.</param>
 /// <param name="Kind">
 /// What the app does with it: <see cref="PlayQueueKind"/> fetches the queue and plays it; <see cref="ToggleKind"/>
-/// posts the action, which flips its state and answers the updated action. Apps ignore kinds they don't know.
+/// posts the action, which flips its state and answers the updated action; <see cref="RequestKind"/> posts the action
+/// while it is <see cref="Enabled"/>, which records a request and answers the updated action. Apps ignore kinds they
+/// don't know.
 /// </param>
 public record ItemAction(string Id, string Label, string Icon, string Kind)
 {
@@ -23,6 +25,12 @@ public record ItemAction(string Id, string Label, string Icon, string Kind)
     /// The kind of an action that is on or off (<see cref="StateOn"/>, <see cref="StateOff"/>); posting it flips it.
     /// </summary>
     public const string ToggleKind = "toggle";
+
+    /// <summary>
+    /// The kind of an action that records a request, such as Download. Its <see cref="State"/> follows the request, with
+    /// a label for each; it is enabled only while a request can be made.
+    /// </summary>
+    public const string RequestKind = "request";
 
     /// <summary>
     /// The state of a toggle that is on.

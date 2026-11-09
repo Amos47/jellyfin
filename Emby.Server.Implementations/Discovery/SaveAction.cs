@@ -82,14 +82,15 @@ public sealed class SaveAction : IItemActionProvider
             return null;
         }
 
-        var saved = await _lists.GetDefaultListAsync(user.Id, cancellationToken).ConfigureAwait(false);
         var imdbId = item.GetProviderId(MetadataProvider.Imdb);
 
         // Under the film sync's lock, so a sync can't delete the film between the check and the save: a film that is
-        // gone by now (its list rotated out and the sync ran) isn't saved. The toggle itself is atomic in the store.
+        // gone by now (its list rotated out and the sync ran) isn't saved. Saved is read inside the lock too, so the
+        // check sees any save or removal that finished first. The toggle itself is atomic in the store.
         var on = await _filmSync.RunExclusiveAsync(
             async () =>
             {
+                var saved = await _lists.GetDefaultListAsync(user.Id, cancellationToken).ConfigureAwait(false);
                 if (!saved.Contains(tmdbId) && _filmSync.FindFilm(tmdbId) is null && _filmSync.FindOwned(user, tmdbId, null) is null)
                 {
                     return false;

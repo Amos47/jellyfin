@@ -44,6 +44,8 @@ public class DiscoveryControllerTests
             _picks.Object,
             _planner.Object,
             _settings.Object,
+            Mock.Of<IDiscoveryRequestStore>(),
+            Mock.Of<IUserListStore>(),
             _userManager.Object,
             NullLogger<DiscoveryController>.Instance)
         {
