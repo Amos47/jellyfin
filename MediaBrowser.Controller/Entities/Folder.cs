@@ -2076,7 +2076,8 @@ namespace MediaBrowser.Controller.Entities
                     }
                     else
                     {
-                        dto.Played = true;
+                        // Fork: a show with no episodes (a discovery show, or one still downloading) isn't watched
+                        dto.Played = this is not Series;
                     }
                 }
             }
