@@ -105,8 +105,10 @@ public class ItemActionsController : BaseJellyfinApiController
             return NotFound();
         }
 
-        var queue = await provider.GetQueueAsync(user, item, cancellationToken).ConfigureAwait(false);
-        return Ok(new ItemActionQueueDto(queue.ToArray()));
+        var queue = await provider.GetQueueEntriesAsync(user, item, cancellationToken).ConfigureAwait(false);
+        return Ok(new ItemActionQueueDto(
+            queue.Select(e => e.Id).ToArray(),
+            queue.Select(e => new ItemActionQueueItemDto(e.Id, e.Title, e.Subtitle)).ToArray()));
     }
 
     // The item as the detail endpoint resolves it for the user, so a hidden or restricted item is a 404 here too.

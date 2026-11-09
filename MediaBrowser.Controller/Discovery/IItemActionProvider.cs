@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
@@ -35,4 +36,15 @@ public interface IItemActionProvider
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The item ids.</returns>
     Task<IReadOnlyList<Guid>> GetQueueAsync(User user, BaseItem item, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gets the entries to play, in order, with the title a player shows for each. The default names nothing, so only
+    /// providers that can name their entries override it.
+    /// </summary>
+    /// <param name="user">The user.</param>
+    /// <param name="item">The item, already checked to be visible to the user.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The entries, in the order of <see cref="GetQueueAsync"/>.</returns>
+    async Task<IReadOnlyList<QueueEntry>> GetQueueEntriesAsync(User user, BaseItem item, CancellationToken cancellationToken)
+        => (await GetQueueAsync(user, item, cancellationToken).ConfigureAwait(false)).Select(id => new QueueEntry(id, null, null)).ToList();
 }

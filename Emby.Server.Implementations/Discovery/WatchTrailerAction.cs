@@ -66,6 +66,10 @@ public sealed class WatchTrailerAction : IItemActionProvider
 
     /// <inheritdoc />
     public async Task<IReadOnlyList<Guid>> GetQueueAsync(User user, BaseItem item, CancellationToken cancellationToken)
+        => (await GetQueueEntriesAsync(user, item, cancellationToken).ConfigureAwait(false)).Select(e => e.Id).ToList();
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<QueueEntry>> GetQueueEntriesAsync(User user, BaseItem item, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(item);
@@ -81,7 +85,7 @@ public sealed class WatchTrailerAction : IItemActionProvider
         {
             // The film's own trailers still play when the user's picks can't be worked out.
             _logger.LogWarning(ex, "Could not get the discovery picks of user {UserId}; queueing only the trailers of {ItemId}", user.Id, item.Id);
-            return GetTrailerIds(user, item);
+            return GetEntries(user, item);
         }
 
         foreach (var list in lists)
@@ -92,11 +96,21 @@ public sealed class WatchTrailerAction : IItemActionProvider
             if (index >= 0)
             {
                 // The list's TMDB id: an owned row item comes from a light query without its provider ids.
-                return films.Skip(index).SelectMany(f => GetTrailerIds(user, f.Item, f.Film.TmdbId)).ToList();
+                return films.Skip(index).SelectMany(f => GetEntries(user, f.Item, f.Film.TmdbId)).ToList();
             }
         }
 
-        return GetTrailerIds(user, item);
+        return GetEntries(user, item);
+    }
+
+    // The trailers of a film, each named after the film: the row item is the owned film when the user owns it (even
+    // when the trailer is its hidden copy's), else the discovery copy.
+    private List<QueueEntry> GetEntries(User user, BaseItem film, int? tmdbId = null)
+    {
+        var subtitle = film.ProductionYear is { } year
+            ? string.Create(CultureInfo.InvariantCulture, $"Trailer \u00b7 {year}")
+            : "Trailer";
+        return GetTrailerIds(user, film, tmdbId).Select(id => new QueueEntry(id, film.Name, subtitle)).ToList();
     }
 
     private IReadOnlyList<Guid> GetTrailerIds(User user, BaseItem item, int? tmdbId = null)

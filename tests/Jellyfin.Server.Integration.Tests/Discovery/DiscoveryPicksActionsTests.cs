@@ -241,6 +241,36 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
     }
 
     [Fact]
+    public async Task Queue_HasItemsNamedAfterTheirFilmBesideUnchangedItemIds()
+    {
+        var client = await SetUpAsync();
+        var admin = await GetAdminAsync(client);
+        try
+        {
+            await PutListAsync(client, "qu-3", 1181, 1182);
+            var first = await SetTrailerAsync(client, 1181, "queue-1181");
+            var second = await SetTrailerAsync(client, 1182, "queue-1182");
+            await SaveLayoutAsync(admin, maxRows: 10, enabled: true);
+
+            var queue = await GetAsync<JsonObject>(client, $"Items/{Sync.FindFilm(1181)!.Id:N}/Actions/watch-trailer/Queue");
+
+            var ids = queue["ItemIds"]!.AsArray().Select(n => Guid.Parse((string)n!)).ToArray();
+            var items = queue["Items"]!.AsArray();
+            Assert.Equal(new[] { first, second }, ids);
+            Assert.Equal(ids, items.Select(n => Guid.Parse((string)n!["Id"]!)).ToArray());
+            Assert.Equal(
+                new[] { Sync.FindFilm(1181)!.Name, Sync.FindFilm(1182)!.Name },
+                items.Select(n => (string?)n!["Title"]).ToArray());
+            Assert.All(items, n => Assert.StartsWith("Trailer", (string?)n!["Subtitle"], StringComparison.Ordinal));
+        }
+        finally
+        {
+            await Layouts.ResetUserLayoutAsync(admin, Ct);
+            await DeleteListsAsync(client, "qu-3");
+        }
+    }
+
+    [Fact]
     public async Task Queue_NotInPick_OwnTrailersOnly()
     {
         var client = await SetUpAsync();
