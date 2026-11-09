@@ -6,8 +6,9 @@ using MediaBrowser.Model.Entities;
 namespace MediaBrowser.Controller.Discovery;
 
 /// <summary>
-/// Fork: tells when a download request is done. A request is done once the film is in a library
-/// (<see cref="IDiscoveryFilmSync.FindOwned(int, string?)"/>); the server sets that itself, on each read of the
+/// Fork: tells when a download request is done. A request is done once its title is in a library
+/// (<see cref="DiscoveryTitles.FindOwnedTitle(IDiscoveryFilmSync, int, string?, DiscoveryMediaType)"/>: a film for a
+/// Movie request, a show for a Series one); the server sets that itself, on each read of the
 /// request (the film's actions, the requests list, the protected films), since it is the one that sees the film.
 /// </summary>
 public static class DiscoveryRequestDone
@@ -67,8 +68,8 @@ public static class DiscoveryRequestDone
         => IsOwned(filmSync, tmdbId, DiscoveryMediaType.Movie);
 
     /// <summary>
-    /// Gets whether a title of a type is in a library. Only films are matched so far: a show is never owned here, so
-    /// a show's request is never marked done by a film with the same TMDB id.
+    /// Gets whether a title of a type is in a library: a library film for a Movie, a library show for a Series, matched
+    /// by TMDB id or by the IMDb id its discovery title has. A film never finishes a show's request, nor a show a film's.
     /// </summary>
     /// <param name="filmSync">The film sync.</param>
     /// <param name="tmdbId">The TMDB id.</param>
@@ -78,12 +79,7 @@ public static class DiscoveryRequestDone
     {
         System.ArgumentNullException.ThrowIfNull(filmSync);
 
-        if (type != DiscoveryMediaType.Movie)
-        {
-            return false;
-        }
-
-        var imdbId = filmSync.FindFilm(tmdbId)?.GetProviderId(MetadataProvider.Imdb);
-        return filmSync.FindOwned(tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId) is not null;
+        var imdbId = filmSync.FindTitle(tmdbId, type)?.GetProviderId(MetadataProvider.Imdb);
+        return filmSync.FindOwnedTitle(tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, type) is not null;
     }
 }

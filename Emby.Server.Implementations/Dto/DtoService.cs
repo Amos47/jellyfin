@@ -269,7 +269,7 @@ namespace Emby.Server.Implementations.Dto
                 }
             }
 
-            bool? externalTrailers = null; // Fork: discovery, the user's setting, looked up once per call
+            var externalTrailers = new DiscoveryExternalTrailers(); // Fork: discovery, the user's settings, looked up once per call
             for (int index = 0; index < accessibleItems.Count; index++)
             {
                 var item = accessibleItems[index];
@@ -286,7 +286,7 @@ namespace Emby.Server.Implementations.Dto
                     resumeDataBatch?.GetValueOrDefault(item.Id),
                     peopleBatch,
                     alternateVersionItemIds);
-                HideDiscoveryRemoteTrailers(item, dto, user, ref externalTrailers); // Fork: discovery
+                HideDiscoveryRemoteTrailers(item, dto, user, externalTrailers); // Fork: discovery
 
                 if (item is LiveTvChannel tvChannel)
                 {
@@ -321,8 +321,8 @@ namespace Emby.Server.Implementations.Dto
         public BaseItemDto GetBaseItemDto(BaseItem item, DtoOptions options, User? user = null, BaseItem? owner = null)
         {
             var dto = GetBaseItemDtoInternal(item, options, user, owner, null);
-            bool? externalTrailers = null; // Fork: discovery
-            HideDiscoveryRemoteTrailers(item, dto, user, ref externalTrailers); // Fork: discovery
+            var externalTrailers = new DiscoveryExternalTrailers(); // Fork: discovery
+            HideDiscoveryRemoteTrailers(item, dto, user, externalTrailers); // Fork: discovery
             if (item is LiveTvChannel tvChannel)
             {
                 LivetvManager.AddChannelInfo(new[] { (dto, tvChannel) }, options, user);

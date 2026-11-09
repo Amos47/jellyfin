@@ -10,6 +10,7 @@ using MediaBrowser.Controller.Discovery;
 using MediaBrowser.Controller.Dto;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Entities;
 using Microsoft.Extensions.Logging;
@@ -17,14 +18,18 @@ using Microsoft.Extensions.Logging;
 namespace Emby.Server.Implementations.Discovery;
 
 /// <summary>
-/// Fork: creates a pathless virtual <see cref="Movie"/> in the discovery folder for every TMDB id in a discovery
-/// list, and deletes the virtual films (with their extras) that are in no list. A film in any user's list (such as
-/// Saved), or with a download request that isn't done, is kept even when no discovery list has it any more. Library
-/// films are never touched.
+/// Fork: creates a pathless virtual <see cref="Movie"/> in the discovery folder for every TMDB id in a Movie discovery
+/// list, and a pathless virtual <see cref="Series"/> (no seasons or episodes) for every TMDB id in a Series list, and
+/// deletes the virtual titles (with their extras) that are in no list of their type. A title in any user's list (such
+/// as Saved), or with a download request that isn't done, is kept even when no discovery list has it any more, by its
+/// own type. Library items are never touched.
 /// </summary>
 public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
 {
     private const string IdPrefix = "discovery-tmdb-";
+
+    // A show's id key differs from a film's, so the two items of one TMDB id never share an id.
+    private const string SeriesIdPrefix = "discovery-tmdb-tv-";
 
     private readonly ILibraryManager _libraryManager;
     private readonly IDiscoveryStore _store;
@@ -75,41 +80,53 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
         {
             var lists = await _store.GetListsAsync(cancellationToken).ConfigureAwait(false);
 
-            // TMDB id -> IMDb id (the first one any list gives). Only movie lists have virtual films; the user lists and
-            // requests read below are the movies' too.
-            var wanted = new Dictionary<int, string?>();
-            foreach (var film in lists.Where(l => l.ItemType == DiscoveryMediaType.Movie).SelectMany(l => l.Films))
+            // (TMDB id, type) -> IMDb id (the first one any list of that type gives). A list's films are all of its type.
+            var wanted = new Dictionary<(int TmdbId, DiscoveryMediaType Type), string?>();
+            foreach (var list in lists)
             {
-                if (!wanted.TryGetValue(film.TmdbId, out var imdbId) || string.IsNullOrEmpty(imdbId))
+                foreach (var film in list.Films)
                 {
-                    wanted[film.TmdbId] = string.IsNullOrEmpty(film.ImdbId) ? null : film.ImdbId;
+                    var key = (film.TmdbId, list.ItemType);
+                    if (!wanted.TryGetValue(key, out var imdbId) || string.IsNullOrEmpty(imdbId))
+                    {
+                        wanted[key] = string.IsNullOrEmpty(film.ImdbId) ? null : film.ImdbId;
+                    }
                 }
             }
 
-            // Films in a user's list or with a request that isn't done are kept, though not created: they were discovery
-            // films when they were saved or requested. Read under the sync lock, which saves and requests take too
-            // (RunExclusiveAsync), so a film saved or requested meanwhile is never deleted.
-            var listed = await _userLists.GetListedTmdbIdsAsync(cancellationToken).ConfigureAwait(false);
-            var requested = await _requests.GetActiveTmdbIdsAsync(cancellationToken).ConfigureAwait(false);
-            var wantedIds = wanted.Keys.Concat(listed).Concat(requested).Select(GetFilmId).ToHashSet();
+            // Titles in a user's list or with a request that isn't done are kept, though not created: they were
+            // discovery titles when they were saved or requested. Read under the sync lock, which saves and requests take
+            // too (RunExclusiveAsync), so a title saved or requested meanwhile is never deleted. Each by its own type.
+            var wantedIds = wanted.Keys.Select(k => GetTitleId(k.TmdbId, k.Type)).ToHashSet();
+            foreach (var type in Enum.GetValues<DiscoveryMediaType>())
+            {
+                var listed = type == DiscoveryMediaType.Movie
+                    ? await _userLists.GetListedTmdbIdsAsync(cancellationToken).ConfigureAwait(false)
+                    : await _userLists.GetListedTmdbIdsAsync(type, cancellationToken).ConfigureAwait(false);
+                var requested = type == DiscoveryMediaType.Movie
+                    ? await _requests.GetActiveTmdbIdsAsync(cancellationToken).ConfigureAwait(false)
+                    : await _requests.GetActiveTmdbIdsAsync(type, cancellationToken).ConfigureAwait(false);
+                wantedIds.UnionWith(listed.Concat(requested).Select(id => GetTitleId(id, type)));
+            }
+
             var folder = _folderLocator.GetFolder();
 
-            foreach (var film in GetFilms(folder.Id))
+            foreach (var title in GetTitles(folder.Id))
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (!wantedIds.Contains(film.Id))
+                if (!wantedIds.Contains(title.Id))
                 {
-                    DeleteFilm(film);
+                    DeleteTitle(title);
                 }
             }
 
-            foreach (var (tmdbId, imdbId) in wanted)
+            foreach (var ((tmdbId, type), imdbId) in wanted)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                var existing = FindFilm(tmdbId);
+                var existing = this.FindTitle(tmdbId, type);
                 if (existing is null)
                 {
-                    CreateFilm(folder, tmdbId, imdbId);
+                    CreateTitle(folder, tmdbId, type, imdbId);
                 }
                 else if (imdbId is not null
                     && !string.Equals(existing.GetProviderId(MetadataProvider.Imdb), imdbId, StringComparison.Ordinal))
@@ -143,10 +160,43 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
 
     /// <inheritdoc />
     public Movie? FindFilm(int tmdbId)
-        => _libraryManager.GetItemById(GetFilmId(tmdbId)) as Movie;
+        => _libraryManager.GetItemById(GetTitleId(tmdbId, DiscoveryMediaType.Movie)) as Movie;
 
     /// <inheritdoc />
     public Movie? FindFilmByImdb(string imdbId)
+        => FindByImdb(imdbId, DiscoveryMediaType.Movie) as Movie;
+
+    /// <inheritdoc />
+    public BaseItem? FindOwned(User user, int tmdbId, string? imdbId)
+    {
+        ArgumentNullException.ThrowIfNull(user);
+        return QueryOwned(new InternalItemsQuery(user), tmdbId, imdbId, DiscoveryMediaType.Movie);
+    }
+
+    /// <inheritdoc />
+    public BaseItem? FindOwned(int tmdbId, string? imdbId)
+        => QueryOwned(new InternalItemsQuery(), tmdbId, imdbId, DiscoveryMediaType.Movie);
+
+    /// <inheritdoc />
+    public Series? FindSeries(int tmdbId)
+        => _libraryManager.GetItemById(GetTitleId(tmdbId, DiscoveryMediaType.Series)) as Series;
+
+    /// <inheritdoc />
+    public Series? FindSeriesByImdb(string imdbId)
+        => FindByImdb(imdbId, DiscoveryMediaType.Series) as Series;
+
+    /// <inheritdoc />
+    public BaseItem? FindOwnedSeries(User user, int tmdbId, string? imdbId)
+    {
+        ArgumentNullException.ThrowIfNull(user);
+        return QueryOwned(new InternalItemsQuery(user), tmdbId, imdbId, DiscoveryMediaType.Series);
+    }
+
+    /// <inheritdoc />
+    public BaseItem? FindOwnedSeries(int tmdbId, string? imdbId)
+        => QueryOwned(new InternalItemsQuery(), tmdbId, imdbId, DiscoveryMediaType.Series);
+
+    private BaseItem? FindByImdb(string imdbId, DiscoveryMediaType type)
     {
         var folderId = _folderLocator.FolderId;
         if (string.IsNullOrEmpty(imdbId) || folderId.Equals(Guid.Empty))
@@ -154,32 +204,21 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
             return null;
         }
 
-        var films = _libraryManager.GetItemList(new InternalItemsQuery
+        var titles = _libraryManager.GetItemList(new InternalItemsQuery
         {
             IncludeDiscovery = true,
             ParentId = folderId,
-            IncludeItemTypes = [BaseItemKind.Movie],
+            IncludeItemTypes = [DiscoveryTitles.ToItemKind(type)],
             HasAnyProviderId = new Dictionary<string, string> { [MetadataProvider.Imdb.ToString()] = imdbId },
             Limit = 1,
             DtoOptions = new DtoOptions(false),
         });
 
-        // The light query's item lacks its extras: load the film in full.
-        return films.Count > 0 ? _libraryManager.GetItemById(films[0].Id) as Movie : null;
+        // The light query's item lacks its extras: load the title in full.
+        return titles.Count > 0 ? _libraryManager.GetItemById(titles[0].Id) : null;
     }
 
-    /// <inheritdoc />
-    public BaseItem? FindOwned(User user, int tmdbId, string? imdbId)
-    {
-        ArgumentNullException.ThrowIfNull(user);
-        return QueryOwned(new InternalItemsQuery(user), tmdbId, imdbId);
-    }
-
-    /// <inheritdoc />
-    public BaseItem? FindOwned(int tmdbId, string? imdbId)
-        => QueryOwned(new InternalItemsQuery(), tmdbId, imdbId);
-
-    private BaseItem? QueryOwned(InternalItemsQuery query, int tmdbId, string? imdbId)
+    private BaseItem? QueryOwned(InternalItemsQuery query, int tmdbId, string? imdbId, DiscoveryMediaType type)
     {
         var providerIds = new Dictionary<string, string>
         {
@@ -190,8 +229,9 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
             providerIds[MetadataProvider.Imdb.ToString()] = imdbId;
         }
 
-        // The discovery guard (no IncludeDiscovery) keeps the virtual films out, so only library films match.
-        query.IncludeItemTypes = [BaseItemKind.Movie];
+        // The discovery guard (no IncludeDiscovery) keeps the virtual titles out, so only library items match: films for
+        // a Movie, shows for a Series.
+        query.IncludeItemTypes = [DiscoveryTitles.ToItemKind(type)];
         query.Recursive = true;
         query.IsVirtualItem = false;
         query.HasAnyProviderId = providerIds;
@@ -201,47 +241,48 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
         return owned.Count > 0 ? owned[0] : null;
     }
 
-    private Guid GetFilmId(int tmdbId)
-        => _libraryManager.GetNewItemId(IdPrefix + tmdbId.ToString(CultureInfo.InvariantCulture), typeof(Movie));
+    private Guid GetTitleId(int tmdbId, DiscoveryMediaType type)
+        => type == DiscoveryMediaType.Series
+            ? _libraryManager.GetNewItemId(SeriesIdPrefix + tmdbId.ToString(CultureInfo.InvariantCulture), typeof(Series))
+            : _libraryManager.GetNewItemId(IdPrefix + tmdbId.ToString(CultureInfo.InvariantCulture), typeof(Movie));
 
-    private IReadOnlyList<BaseItem> GetFilms(Guid folderId)
+    private IReadOnlyList<BaseItem> GetTitles(Guid folderId)
         => _libraryManager.GetItemList(new InternalItemsQuery
         {
             IncludeDiscovery = true,
             ParentId = folderId,
-            IncludeItemTypes = [BaseItemKind.Movie],
+            IncludeItemTypes = [BaseItemKind.Movie, BaseItemKind.Series],
         });
 
-    private void CreateFilm(BasePluginFolder folder, int tmdbId, string? imdbId)
+    private void CreateTitle(BasePluginFolder folder, int tmdbId, DiscoveryMediaType type, string? imdbId)
     {
-        // No path: pathless items are never removed by library scans.
-        var film = new Movie
-        {
-            Id = GetFilmId(tmdbId),
-            Name = "TMDB " + tmdbId.ToString(CultureInfo.InvariantCulture),
-            IsVirtualItem = true,
-        };
-        film.SetProviderId(MetadataProvider.Tmdb, tmdbId.ToString(CultureInfo.InvariantCulture));
+        // No path: pathless items are never removed by library scans. A show gets no seasons or episodes: the TMDB series
+        // provider fills in the show itself (overview, images, remote trailers) and creates no children.
+        BaseItem title = type == DiscoveryMediaType.Series ? new Series() : new Movie();
+        title.Id = GetTitleId(tmdbId, type);
+        title.Name = "TMDB " + tmdbId.ToString(CultureInfo.InvariantCulture);
+        title.IsVirtualItem = true;
+        title.SetProviderId(MetadataProvider.Tmdb, tmdbId.ToString(CultureInfo.InvariantCulture));
         if (imdbId is not null)
         {
-            film.SetProviderId(MetadataProvider.Imdb, imdbId);
+            title.SetProviderId(MetadataProvider.Imdb, imdbId);
         }
 
-        _logger.LogInformation("Creating discovery film for TMDB id {TmdbId}", tmdbId);
-        folder.AddChild(film);
-        _refresher.QueueRefresh(film.Id);
+        _logger.LogInformation("Creating discovery {Type} for TMDB id {TmdbId}", type == DiscoveryMediaType.Series ? "show" : "film", tmdbId);
+        folder.AddChild(title);
+        _refresher.QueueRefresh(title.Id);
     }
 
-    private void DeleteFilm(BaseItem film)
+    private void DeleteTitle(BaseItem film)
     {
-        // Only virtual pathless films are ever deleted here, whatever else ends up in the folder.
+        // Only virtual pathless titles are ever deleted here, whatever else ends up in the folder.
         if (!film.IsVirtualItem || !string.IsNullOrEmpty(film.Path))
         {
-            _logger.LogWarning("Not deleting {Name} ({Id}) from the discovery folder: it is not a virtual film", film.Name, film.Id);
+            _logger.LogWarning("Not deleting {Name} ({Id}) from the discovery folder: it is not a virtual title", film.Name, film.Id);
             return;
         }
 
-        // Extras (pushed trailers) are owned by the film, not its children, so DeleteItem leaves them behind.
+        // Extras (pushed trailers) are owned by the title, not its children, so DeleteItem leaves them behind.
         // Their files belong to the app that pushed them, so only the items go.
         var extras = _libraryManager.GetItemList(new InternalItemsQuery
         {
@@ -254,7 +295,7 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
             _libraryManager.DeleteItem(extra, options, false);
         }
 
-        _logger.LogInformation("Deleting discovery film {Name} ({Id}), in no list", film.Name, film.Id);
+        _logger.LogInformation("Deleting discovery title {Name} ({Id}), in no list", film.Name, film.Id);
         _libraryManager.DeleteItem(film, options, false);
     }
 }

@@ -4,18 +4,22 @@ using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
+using MediaBrowser.Controller.Entities.TV;
 
 namespace MediaBrowser.Controller.Discovery;
 
 /// <summary>
-/// Fork: keeps the virtual discovery films in step with the discovery lists.
+/// Fork: keeps the virtual discovery titles in step with the discovery lists: a virtual <see cref="Movie"/> for each film
+/// of a Movie list, and a virtual <see cref="Series"/> (pathless, with no seasons or episodes) for each show of a Series
+/// list. A film and a show with one TMDB id are two items. The typed lookups are in <see cref="DiscoveryTitles"/>.
 /// </summary>
 public interface IDiscoveryFilmSync
 {
     /// <summary>
-    /// Makes sure a virtual film exists for every TMDB id in any list, and deletes the virtual films (and their
-    /// extras) that are in no list. Films in any user's list (<see cref="IUserListStore"/>) and films with a request
-    /// that isn't done (<see cref="IDiscoveryRequestStore"/>) are kept, not created. Library films are never touched.
+    /// Makes sure a virtual title exists for every TMDB id in any list, of the list's type, and deletes the virtual
+    /// titles (and their extras) that are in no list of their type. Titles in any user's list (<see cref="IUserListStore"/>)
+    /// and titles with a request that isn't done (<see cref="IDiscoveryRequestStore"/>) are kept, not created, each by
+    /// its own type. Library items are never touched.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task.</returns>
@@ -63,4 +67,36 @@ public interface IDiscoveryFilmSync
     /// <param name="imdbId">The IMDb id, if known.</param>
     /// <returns>The library film, or null if there is none.</returns>
     BaseItem? FindOwned(int tmdbId, string? imdbId);
+
+    /// <summary>
+    /// Gets the virtual discovery show of a TMDB (TV) id.
+    /// </summary>
+    /// <param name="tmdbId">The TMDB id.</param>
+    /// <returns>The show, or null if there is none.</returns>
+    Series? FindSeries(int tmdbId);
+
+    /// <summary>
+    /// Gets the virtual discovery show with a matching IMDb id.
+    /// </summary>
+    /// <param name="imdbId">The IMDb id.</param>
+    /// <returns>The show, or null if there is none.</returns>
+    Series? FindSeriesByImdb(string imdbId);
+
+    /// <summary>
+    /// Gets the show in the user's library with a matching TMDB or IMDb id.
+    /// </summary>
+    /// <param name="user">The user.</param>
+    /// <param name="tmdbId">The TMDB (TV) id.</param>
+    /// <param name="imdbId">The IMDb id, if known.</param>
+    /// <returns>The library show, or null if the user has none.</returns>
+    BaseItem? FindOwnedSeries(User user, int tmdbId, string? imdbId);
+
+    /// <summary>
+    /// Gets a show in any library with a matching TMDB or IMDb id, whoever may see it: used to tell that a requested
+    /// show has been downloaded.
+    /// </summary>
+    /// <param name="tmdbId">The TMDB (TV) id.</param>
+    /// <param name="imdbId">The IMDb id, if known.</param>
+    /// <returns>The library show, or null if there is none.</returns>
+    BaseItem? FindOwnedSeries(int tmdbId, string? imdbId);
 }

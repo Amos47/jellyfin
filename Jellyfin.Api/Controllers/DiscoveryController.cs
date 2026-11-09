@@ -25,7 +25,7 @@ using Microsoft.Extensions.Logging;
 namespace Jellyfin.Api.Controllers;
 
 /// <summary>
-/// Fork: the movie discovery hub. Outside apps push lists of films by TMDB id.
+/// Fork: the discovery hub. Outside apps push lists of films or shows by TMDB id (with a media type).
 /// </summary>
 [Route("Discovery")]
 [Authorize(Policy = Policies.RequiresElevation)]
@@ -85,16 +85,21 @@ public partial class DiscoveryController : BaseJellyfinApiController
     }
 
     /// <summary>
-    /// Gets the films the home screens pick on a day: for every user with an enabled Movie discovery row, the films
-    /// of the lists picked for them. Nothing is recorded as shown.
+    /// Gets the titles of one media type the home screens pick on a day: for every user with an enabled discovery row
+    /// of the type (Movie discovery for films, the default; Show discovery for <c>?type=Series</c>), the titles of the
+    /// lists picked for them. Nothing is recorded as shown.
     /// </summary>
     /// <param name="date">The day (server local), as yyyy-MM-dd. Defaults to tomorrow.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
+    /// <param name="type">Optional: the media type of the picks, Movie (the default) or Series.</param>
     /// <response code="200">Picks returned.</response>
-    /// <returns>The day and the TMDB ids of its picked films.</returns>
+    /// <returns>The day and the TMDB ids of its picked titles, also with their type.</returns>
     [HttpGet("Picks")]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<ActionResult<DiscoveryPicksDto>> GetPicks([FromQuery] DateOnly? date, CancellationToken cancellationToken)
+    public async Task<ActionResult<DiscoveryPicksDto>> GetPicks(
+        [FromQuery] DateOnly? date,
+        CancellationToken cancellationToken,
+        [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
         var day = date ?? DateOnly.FromDateTime(DateTime.Now).AddDays(1);
         var tmdbIds = new List<int>();
@@ -104,7 +109,9 @@ public partial class DiscoveryController : BaseJellyfinApiController
             IReadOnlyList<DiscoveryList> lists;
             try
             {
-                lists = await _picks.GetPickedListsAsync(user, day, cancellationToken).ConfigureAwait(false);
+                lists = type == DiscoveryMediaType.Movie
+                    ? await _picks.GetPickedListsAsync(user, day, cancellationToken).ConfigureAwait(false)
+                    : await _picks.GetPickedListsAsync(user, day, type, cancellationToken).ConfigureAwait(false);
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -119,7 +126,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
             }
         }
 
-        return Ok(new DiscoveryPicksDto(day, tmdbIds));
+        return Ok(new DiscoveryPicksDto(day, tmdbIds, type, tmdbIds.Select(id => new DiscoveryPickedItemDto(id, type)).ToArray()));
     }
 
     /// <summary>
@@ -145,24 +152,29 @@ public partial class DiscoveryController : BaseJellyfinApiController
     }
 
     /// <summary>
-    /// Gets the discovery films: every film of every movie list, each once, with whether it has a trailer and when it
-    /// was shown.
+    /// Gets the discovery titles of one media type: every title of every list of the type (Movie, the default, or
+    /// Series), each once, with whether it has a trailer and when it was shown.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
+    /// <param name="type">Optional: the media type, Movie (the default) or Series.</param>
     /// <response code="200">Films returned.</response>
-    /// <returns>The films.</returns>
+    /// <returns>The titles.</returns>
     [HttpGet("Films")]
     [ProducesResponseType(StatusCodes.Status200OK)]
-    public async Task<ActionResult<DiscoveryFilmStatusDto[]>> GetFilms(CancellationToken cancellationToken)
+    public async Task<ActionResult<DiscoveryFilmStatusDto[]>> GetFilms(
+        CancellationToken cancellationToken,
+        [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
         var lists = await _store.GetListsAsync(cancellationToken).ConfigureAwait(false);
-        var shown = await _store.GetShownAsync(cancellationToken).ConfigureAwait(false);
+        var shown = type == DiscoveryMediaType.Movie
+            ? await _store.GetShownAsync(cancellationToken).ConfigureAwait(false)
+            : await _store.GetShownAsync(type, cancellationToken).ConfigureAwait(false);
         var films = new List<DiscoveryFilmStatusDto>();
         var seen = new HashSet<int>();
-        foreach (var tmdbId in lists.Where(l => l.ItemType == DiscoveryMediaType.Movie).SelectMany(l => l.Films).Select(f => f.TmdbId).Where(seen.Add))
+        foreach (var tmdbId in lists.Where(l => l.ItemType == type).SelectMany(l => l.Films).Select(f => f.TmdbId).Where(seen.Add))
         {
-            // Every listed film has a virtual film once its list is saved; one missing is left out.
-            if (_filmSync.FindFilm(tmdbId) is not { } film)
+            // Every listed title has a virtual title once its list is saved; one missing is left out.
+            if (_filmSync.FindTitle(tmdbId, type) is not { } film)
             {
                 continue;
             }
@@ -174,7 +186,8 @@ public partial class DiscoveryController : BaseJellyfinApiController
                 film.Name,
                 film.GetExtras(_trailerTypes).Any(),
                 log?.FirstShown,
-                log?.LastShown));
+                log?.LastShown,
+                type));
         }
 
         return Ok(films.ToArray());
@@ -197,6 +210,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
     {
         var lists = await _store.GetListsAsync(cancellationToken).ConfigureAwait(false);
         var threshold = await _settings.GetReadyThresholdAsync(cancellationToken).ConfigureAwait(false);
+        int? seriesThreshold = null;
         var viewer = GetViewer();
 
         // A film in several lists is checked once per request; a show with the same TMDB id is another title.
@@ -226,7 +240,21 @@ public partial class DiscoveryController : BaseJellyfinApiController
             return count;
         }
 
-        return Ok(lists.Select(l => ToDto(l, CountReady(l), threshold)).ToArray());
+        // A show list is ready against the Show discovery rows' bar, a film list against Movie discovery's.
+        var dtos = new List<DiscoveryListDto>(lists.Count);
+        foreach (var list in lists)
+        {
+            var bar = threshold;
+            if (list.ItemType != DiscoveryMediaType.Movie)
+            {
+                seriesThreshold ??= await _settings.GetReadyThresholdAsync(DiscoveryMediaType.Series, cancellationToken).ConfigureAwait(false);
+                bar = seriesThreshold.Value;
+            }
+
+            dtos.Add(ToDto(list, CountReady(list), bar));
+        }
+
+        return Ok(dtos.ToArray());
     }
 
     /// <summary>
@@ -356,13 +384,10 @@ public partial class DiscoveryController : BaseJellyfinApiController
         CancellationToken cancellationToken,
         [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
-        // Only films have discovery titles so far: a show's trailer has nothing to attach to.
-        if (type != DiscoveryMediaType.Movie)
-        {
-            return NotFound();
-        }
-
-        var result = await _trailers.SetAsync(tmdbId, trailer.Path ?? string.Empty, cancellationToken).ConfigureAwait(false);
+        // A show's trailer goes on the virtual show of that TMDB id, never on a film with the same id.
+        var result = type == DiscoveryMediaType.Movie
+            ? await _trailers.SetAsync(tmdbId, trailer.Path ?? string.Empty, cancellationToken).ConfigureAwait(false)
+            : await _trailers.SetAsync(tmdbId, type, trailer.Path ?? string.Empty, cancellationToken).ConfigureAwait(false);
         if (result == DiscoveryTrailerResult.Set)
         {
             _planner.InvalidateReadiness();
@@ -393,13 +418,15 @@ public partial class DiscoveryController : BaseJellyfinApiController
         CancellationToken cancellationToken,
         [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
-        // Only films have discovery titles so far: a show has no trailer to remove.
-        if (type != DiscoveryMediaType.Movie)
+        if (type == DiscoveryMediaType.Movie)
         {
-            return NoContent();
+            await _trailers.RemoveAsync(tmdbId, cancellationToken).ConfigureAwait(false);
+        }
+        else
+        {
+            await _trailers.RemoveAsync(tmdbId, type, cancellationToken).ConfigureAwait(false);
         }
 
-        await _trailers.RemoveAsync(tmdbId, cancellationToken).ConfigureAwait(false);
         _planner.InvalidateReadiness();
         return NoContent();
     }
@@ -486,8 +513,10 @@ public partial class DiscoveryController : BaseJellyfinApiController
     }
 
     /// <summary>
-    /// Sets whether downloads are enabled. The discovery app sets it at startup, true only when its download
-    /// configuration is complete; while it is off, discovery films offer no Download. Off until first set.
+    /// Sets whether downloads are enabled, per media type. The discovery app sets it at startup, each true only when
+    /// its download configuration for that type is complete: <c>Enabled</c> for films, <c>SeriesEnabled</c> for shows.
+    /// While one is off, discovery titles of that type offer no Download. Both are off until first set; a missing
+    /// <c>SeriesEnabled</c> is false, so an app that knows no shows turns show downloads off.
     /// </summary>
     /// <param name="setting">The setting.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
@@ -505,7 +534,23 @@ public partial class DiscoveryController : BaseJellyfinApiController
         }
 
         await _requests.SetDownloadsEnabledAsync(enabled, CancellationToken.None).ConfigureAwait(false);
+        await _requests.SetDownloadsEnabledAsync(DiscoveryMediaType.Series, setting.SeriesEnabled ?? false, CancellationToken.None).ConfigureAwait(false);
         return NoContent();
+    }
+
+    /// <summary>
+    /// Gets whether downloads are enabled, per media type: <c>Enabled</c> for films, <c>SeriesEnabled</c> for shows.
+    /// </summary>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="200">Setting returned.</response>
+    /// <returns>The setting.</returns>
+    [HttpGet("Settings/Downloads")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult<DiscoveryDownloadsSettingDto>> GetDownloadsSetting(CancellationToken cancellationToken)
+    {
+        var movies = await _requests.GetDownloadsEnabledAsync(cancellationToken).ConfigureAwait(false);
+        var shows = await _requests.GetDownloadsEnabledAsync(DiscoveryMediaType.Series, cancellationToken).ConfigureAwait(false);
+        return Ok(new DiscoveryDownloadsSettingDto(movies, shows));
     }
 
     /// <summary>

@@ -115,4 +115,23 @@ public interface IDiscoveryRequestStore
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task.</returns>
     Task SetDownloadsEnabledAsync(bool enabled, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gets whether the discovery app has downloads enabled for a media type: films as
+    /// <see cref="GetDownloadsEnabledAsync(CancellationToken)"/>, shows on their own setting. Each is off until the app
+    /// turns it on.
+    /// </summary>
+    /// <param name="type">The media type.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>True if downloads of the type are enabled.</returns>
+    Task<bool> GetDownloadsEnabledAsync(DiscoveryMediaType type, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Sets whether the discovery app has downloads enabled for a media type.
+    /// </summary>
+    /// <param name="type">The media type.</param>
+    /// <param name="enabled">Whether downloads of the type are enabled.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>A task.</returns>
+    Task SetDownloadsEnabledAsync(DiscoveryMediaType type, bool enabled, CancellationToken cancellationToken);
 }

@@ -13,9 +13,10 @@ using MediaBrowser.Model.Entities;
 namespace Emby.Server.Implementations.Discovery;
 
 /// <summary>
-/// Fork: the Save toggle. It is offered on virtual discovery films, and on any film already in one of the user's lists
-/// (by TMDB id, so a discovery film that has since become owned can still be removed). Its state is whether the film is
-/// in the user's default list, Saved; posting it adds the film there or removes it. Lists are per user.
+/// Fork: the Save toggle. It is offered on virtual discovery films and shows, and on any film or show already in one of
+/// the user's lists (by TMDB id and type, so a discovery title that has since become owned can still be removed). Its
+/// state is whether the title is in the user's default list, Saved; posting it adds the title there or removes it. A
+/// film and a show with one TMDB id are saved apart. Lists are per user.
 /// </summary>
 public sealed class SaveAction : IItemActionProvider
 {
@@ -53,18 +54,18 @@ public sealed class SaveAction : IItemActionProvider
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(item);
 
-        if (GetTmdbId(item) is not { } tmdbId)
+        if (!DiscoveryTitles.TryGetTmdbId(item, out var tmdbId, out var type))
         {
             return null;
         }
 
         var lists = await _lists.GetListsAsync(user.Id, cancellationToken).ConfigureAwait(false);
-        if (!IsDiscoveryFilm(item, tmdbId) && !lists.Any(l => l.Contains(tmdbId)))
+        if (!IsDiscoveryTitle(item, tmdbId, type) && !lists.Any(l => l.Contains(tmdbId, type)))
         {
             return null;
         }
 
-        return Create(lists.First(l => l.IsDefault).Contains(tmdbId));
+        return Create(lists.First(l => l.IsDefault).Contains(tmdbId, type));
     }
 
     /// <inheritdoc />
@@ -77,7 +78,7 @@ public sealed class SaveAction : IItemActionProvider
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(item);
 
-        if (GetTmdbId(item) is not { } tmdbId)
+        if (!DiscoveryTitles.TryGetTmdbId(item, out var tmdbId, out var type))
         {
             return null;
         }
@@ -91,12 +92,12 @@ public sealed class SaveAction : IItemActionProvider
             async () =>
             {
                 var saved = await _lists.GetDefaultListAsync(user.Id, cancellationToken).ConfigureAwait(false);
-                if (!saved.Contains(tmdbId) && _filmSync.FindFilm(tmdbId) is null && _filmSync.FindOwned(user, tmdbId, null) is null)
+                if (!saved.Contains(tmdbId, type) && _filmSync.FindTitle(tmdbId, type) is null && _filmSync.FindOwnedTitle(user, tmdbId, null, type) is null)
                 {
                     return false;
                 }
 
-                return await _lists.ToggleAsync(user.Id, saved.Id, tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, cancellationToken).ConfigureAwait(false) ?? false;
+                return await _lists.ToggleAsync(user.Id, saved.Id, tmdbId, type, string.IsNullOrEmpty(imdbId) ? null : imdbId, cancellationToken).ConfigureAwait(false) ?? false;
             },
             cancellationToken).ConfigureAwait(false);
 
@@ -113,12 +114,7 @@ public sealed class SaveAction : IItemActionProvider
             Enabled = true,
         };
 
-    private static int? GetTmdbId(BaseItem item)
-        => item is Movie && int.TryParse(item.GetProviderId(MetadataProvider.Tmdb), NumberStyles.None, CultureInfo.InvariantCulture, out var tmdbId) && tmdbId > 0
-            ? tmdbId
-            : null;
-
-    // The virtual discovery film of its TMDB id, not a library film with the same id.
-    private bool IsDiscoveryFilm(BaseItem item, int tmdbId)
-        => _filmSync.FindFilm(tmdbId) is { } film && film.Id.Equals(item.Id);
+    // The virtual discovery title of its TMDB id and type, not a library item with the same id.
+    private bool IsDiscoveryTitle(BaseItem item, int tmdbId, DiscoveryMediaType type)
+        => _filmSync.FindTitle(tmdbId, type) is { } title && title.Id.Equals(item.Id);
 }

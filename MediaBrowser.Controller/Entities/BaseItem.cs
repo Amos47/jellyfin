@@ -1137,7 +1137,7 @@ namespace MediaBrowser.Controller.Entities
             //    return PlayAccess.None;
             // }
 
-            return IsVirtualItem && this is Movies.Movie ? PlayAccess.None : PlayAccess.Full; // Fork: discovery
+            return IsVirtualItem && this is Movies.Movie or TV.Series ? PlayAccess.None : PlayAccess.Full; // Fork: discovery, virtual films and shows never play
         }
 
         public virtual IReadOnlyList<MediaStream> GetMediaStreams()

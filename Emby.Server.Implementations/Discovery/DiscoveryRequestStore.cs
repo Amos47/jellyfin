@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
 using System.Linq;
@@ -21,8 +22,8 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
     private readonly IDbContextFactory<CustomDbContext> _dbFactory;
     private readonly SemaphoreSlim _writeLock = new(1, 1);
 
-    // Read on every film's actions, so kept once read; only this store writes it.
-    private bool? _downloadsEnabled;
+    // Read on every title's actions, so kept once read, per type; only this store writes it.
+    private readonly ConcurrentDictionary<DiscoveryMediaType, bool> _downloadsEnabled = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DiscoveryRequestStore"/> class.
@@ -214,32 +215,41 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<bool> GetDownloadsEnabledAsync(CancellationToken cancellationToken)
+    public Task<bool> GetDownloadsEnabledAsync(CancellationToken cancellationToken)
+        => GetDownloadsEnabledAsync(DiscoveryMediaType.Movie, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<bool> GetDownloadsEnabledAsync(DiscoveryMediaType type, CancellationToken cancellationToken)
     {
-        if (_downloadsEnabled is { } enabled)
+        if (_downloadsEnabled.TryGetValue(type, out var enabled))
         {
             return enabled;
         }
 
+        var key = GetDownloadsKey(type);
         var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using (context.ConfigureAwait(false))
         {
             var value = await context.DiscoverySettings
                 .AsNoTracking()
-                .Where(s => s.Key == DownloadsEnabledKey)
+                .Where(s => s.Key == key)
                 .Select(s => s.Value)
                 .FirstOrDefaultAsync(cancellationToken)
                 .ConfigureAwait(false);
             enabled = bool.TryParse(value, out var parsed) && parsed;
         }
 
-        _downloadsEnabled ??= enabled;
-        return _downloadsEnabled.Value;
+        return _downloadsEnabled.GetOrAdd(type, enabled);
     }
 
     /// <inheritdoc />
-    public async Task SetDownloadsEnabledAsync(bool enabled, CancellationToken cancellationToken)
+    public Task SetDownloadsEnabledAsync(bool enabled, CancellationToken cancellationToken)
+        => SetDownloadsEnabledAsync(DiscoveryMediaType.Movie, enabled, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task SetDownloadsEnabledAsync(DiscoveryMediaType type, bool enabled, CancellationToken cancellationToken)
     {
+        var key = GetDownloadsKey(type);
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -248,11 +258,11 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
             {
                 var value = enabled.ToString(CultureInfo.InvariantCulture);
                 var setting = await context.DiscoverySettings
-                    .FirstOrDefaultAsync(s => s.Key == DownloadsEnabledKey, cancellationToken)
+                    .FirstOrDefaultAsync(s => s.Key == key, cancellationToken)
                     .ConfigureAwait(false);
                 if (setting is null)
                 {
-                    context.DiscoverySettings.Add(new CustomDiscoverySetting { Key = DownloadsEnabledKey, Value = value });
+                    context.DiscoverySettings.Add(new CustomDiscoverySetting { Key = key, Value = value });
                 }
                 else
                 {
@@ -260,7 +270,7 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
                 }
 
                 await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
-                _downloadsEnabled = enabled;
+                _downloadsEnabled[type] = enabled;
             }
         }
         finally
@@ -268,6 +278,10 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
             _writeLock.Release();
         }
     }
+
+    // The films keep the key they had before shows.
+    private static string GetDownloadsKey(DiscoveryMediaType type)
+        => type == DiscoveryMediaType.Movie ? DownloadsEnabledKey : DownloadsEnabledKey + "-" + DiscoveryMediaTypes.ToStored(type).ToLowerInvariant();
 
     private static DiscoveryRequest ToModel(CustomDiscoveryRequest entity)
         => new(entity.TmdbId, entity.State, entity.UpdatedAt, entity.Users.Select(u => u.UserId).ToArray(), DiscoveryMediaTypes.FromStored(entity.MediaType));

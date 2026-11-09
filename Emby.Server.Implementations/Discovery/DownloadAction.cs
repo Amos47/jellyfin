@@ -13,7 +13,9 @@ namespace Emby.Server.Implementations.Discovery;
 
 /// <summary>
 /// Fork: the Download action (kind <see cref="ItemAction.RequestKind"/>). It is offered on virtual discovery films while
-/// the discovery app has downloads enabled, until the film is in a library. Its state follows the film's request:
+/// the discovery app has film downloads enabled, and on virtual discovery shows while it has show downloads enabled
+/// (each type its own setting), until the title is in a library (a film for a film, a show for a show). Requests are
+/// keyed by TMDB id and type. Its state follows the film's request:
 /// <see cref="StateAvailable"/> (none yet), <see cref="StateFailed"/> (the last attempt failed), both enabled, or
 /// <see cref="StateRequested"/> or <see cref="StateDownloading"/>, disabled for everyone (anyone else uses Save).
 /// Posting it adds the user as a requester, records the request and saves the film to that user's Saved. The action
@@ -80,14 +82,16 @@ public sealed class DownloadAction : IItemActionProvider
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(item);
 
-        if (GetDiscoveryTmdbId(item) is not { } tmdbId
-            || !await _requests.GetDownloadsEnabledAsync(cancellationToken).ConfigureAwait(false))
+        if (GetDiscoveryTmdbId(item) is not { } title
+            || !await GetDownloadsEnabledAsync(title.Type, cancellationToken).ConfigureAwait(false))
         {
             return null;
         }
 
-        var request = await _requests.GetAsync(tmdbId, cancellationToken).ConfigureAwait(false);
-        if (DiscoveryRequestDone.IsOwned(_filmSync, tmdbId))
+        var (tmdbId, type) = title;
+
+        var request = await _requests.GetAsync(tmdbId, type, cancellationToken).ConfigureAwait(false);
+        if (DiscoveryRequestDone.IsOwned(_filmSync, tmdbId, type))
         {
             // In a library now: nothing to download, and the request (if any) is done.
             await DiscoveryRequestDone.CheckAsync(_requests, _filmSync, request, cancellationToken).ConfigureAwait(false);
@@ -107,10 +111,12 @@ public sealed class DownloadAction : IItemActionProvider
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(item);
 
-        if (GetDiscoveryTmdbId(item) is not { } tmdbId)
+        if (GetDiscoveryTmdbId(item) is not { } title)
         {
             return null;
         }
+
+        var (tmdbId, type) = title;
 
         // Under the film sync's lock, like Save, so a sync can't delete the film between the check and the request: a
         // film that is gone by now (its list rotated out and the sync ran) isn't requested, and nothing is performed
@@ -118,22 +124,22 @@ public sealed class DownloadAction : IItemActionProvider
         var request = await _filmSync.RunExclusiveAsync(
             async () =>
             {
-                if (_filmSync.FindFilm(tmdbId) is not { } film)
+                if (_filmSync.FindTitle(tmdbId, type) is not { } film)
                 {
                     return null;
                 }
 
                 // Requested, downloading: nothing to do, the button is disabled. Answer with the current state.
-                var existing = await _requests.GetAsync(tmdbId, cancellationToken).ConfigureAwait(false);
+                var existing = await _requests.GetAsync(tmdbId, type, cancellationToken).ConfigureAwait(false);
                 if (Create(existing?.State).Enabled != true)
                 {
                     return existing;
                 }
 
-                var requested = await _requests.RequestAsync(tmdbId, user.Id, cancellationToken).ConfigureAwait(false);
+                var requested = await _requests.RequestAsync(tmdbId, type, user.Id, cancellationToken).ConfigureAwait(false);
                 var saved = await _lists.GetDefaultListAsync(user.Id, cancellationToken).ConfigureAwait(false);
                 var imdbId = film.GetProviderId(MetadataProvider.Imdb);
-                await _lists.AddFilmAsync(user.Id, saved.Id, tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, cancellationToken).ConfigureAwait(false);
+                await _lists.AddFilmAsync(user.Id, saved.Id, tmdbId, type, string.IsNullOrEmpty(imdbId) ? null : imdbId, cancellationToken).ConfigureAwait(false);
                 return requested;
             },
             cancellationToken).ConfigureAwait(false);
@@ -161,13 +167,17 @@ public sealed class DownloadAction : IItemActionProvider
         };
     }
 
-    // The TMDB id of the virtual discovery film of that id; null for a library film or anything else.
-    private int? GetDiscoveryTmdbId(BaseItem item)
-        => item is Movie
-            && int.TryParse(item.GetProviderId(MetadataProvider.Tmdb), NumberStyles.None, CultureInfo.InvariantCulture, out var tmdbId)
-            && tmdbId > 0
-            && _filmSync.FindFilm(tmdbId) is { } film
-            && film.Id.Equals(item.Id)
-                ? tmdbId
+    // The TMDB id and type of the virtual discovery title of that id; null for a library item or anything else.
+    private (int TmdbId, DiscoveryMediaType Type)? GetDiscoveryTmdbId(BaseItem item)
+        => DiscoveryTitles.TryGetTmdbId(item, out var tmdbId, out var type)
+            && _filmSync.FindTitle(tmdbId, type) is { } title
+            && title.Id.Equals(item.Id)
+                ? (tmdbId, type)
                 : null;
+
+    // Films keep the setting call they had before shows.
+    private Task<bool> GetDownloadsEnabledAsync(DiscoveryMediaType type, CancellationToken cancellationToken)
+        => type == DiscoveryMediaType.Movie
+            ? _requests.GetDownloadsEnabledAsync(cancellationToken)
+            : _requests.GetDownloadsEnabledAsync(type, cancellationToken);
 }

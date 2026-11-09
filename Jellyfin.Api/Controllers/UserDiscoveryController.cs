@@ -245,24 +245,23 @@ public class UserDiscoveryController : BaseJellyfinApiController
         CancellationToken cancellationToken,
         [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
-        // Only films are known to the server so far: a show it doesn't know can't be added.
-        if (GetUser() is not { } user || tmdbId <= 0 || type != DiscoveryMediaType.Movie)
+        if (GetUser() is not { } user || tmdbId <= 0)
         {
             return NotFound();
         }
 
-        // A discovery film the user may see, else the user's own film: never a film the server doesn't know. Checked
-        // and added under the film sync's lock, so a sync can't delete the film in between. Not the request's token for
-        // the add: once added, the film stays even if the client hangs up.
+        // A discovery title of that type the user may see, else the user's own one: never a title the server doesn't
+        // know, and a show only as a show. Checked and added under the film sync's lock, so a sync can't delete the
+        // title in between. Not the request's token for the add: once added, the title stays even if the client hangs up.
         var added = await _filmSync.RunExclusiveAsync(
             async () =>
             {
                 string? imdbId;
-                if (_filmSync.FindFilm(tmdbId) is { } film && film.IsVisibleStandalone(user))
+                if (_filmSync.FindTitle(tmdbId, type) is { } film && film.IsVisibleStandalone(user))
                 {
                     imdbId = film.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Imdb);
                 }
-                else if (_filmSync.FindOwned(user, tmdbId, null) is { } owned)
+                else if (_filmSync.FindOwnedTitle(user, tmdbId, null, type) is { } owned)
                 {
                     imdbId = owned.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Imdb);
                 }
@@ -271,7 +270,7 @@ public class UserDiscoveryController : BaseJellyfinApiController
                     return false;
                 }
 
-                return await _userLists.AddFilmAsync(user.Id, listId, tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, CancellationToken.None).ConfigureAwait(false);
+                return await _userLists.AddFilmAsync(user.Id, listId, tmdbId, type, string.IsNullOrEmpty(imdbId) ? null : imdbId, CancellationToken.None).ConfigureAwait(false);
             },
             cancellationToken).ConfigureAwait(false);
         if (!added)
