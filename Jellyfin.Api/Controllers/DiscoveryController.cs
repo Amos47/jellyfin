@@ -446,9 +446,10 @@ public partial class DiscoveryController : BaseJellyfinApiController
             return Conflict("The request is done: the film is in a library.");
         }
 
-        // Not the request's token: once reported, the state stands even if the client hangs up.
-        await _requests.SetStateAsync(tmdbId, update.State, CancellationToken.None).ConfigureAwait(false);
-        return NoContent();
+        // Not the request's token: once reported, the state stands even if the client hangs up. The store keeps a
+        // request that was marked done meanwhile done.
+        var updated = await _requests.SetStateAsync(tmdbId, update.State, CancellationToken.None).ConfigureAwait(false);
+        return updated is { IsActive: false } ? Conflict("The request is done: the film is in a library.") : NoContent();
     }
 
     /// <summary>

@@ -39,12 +39,12 @@ public interface IDiscoveryRequestStore
     Task<DiscoveryRequest> RequestAsync(int tmdbId, Guid userId, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Sets the state of a request.
+    /// Sets the state of a request. A done request stays done (only <see cref="RequestAsync"/> reopens it).
     /// </summary>
     /// <param name="tmdbId">The TMDB id.</param>
     /// <param name="state">The new state.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    /// <returns>The request as it is now, or null if nobody requested the film.</returns>
+    /// <returns>The request as it is now (done if it was done), or null if nobody requested the film.</returns>
     Task<DiscoveryRequest?> SetStateAsync(int tmdbId, string state, CancellationToken cancellationToken);
 
     /// <summary>

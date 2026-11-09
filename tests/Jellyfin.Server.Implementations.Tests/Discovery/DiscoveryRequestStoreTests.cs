@@ -91,6 +91,20 @@ public sealed class DiscoveryRequestStoreTests : IAsyncLifetime, IDisposable
         Assert.Null(await _store.GetAsync(99, Ct));
     }
 
+    [Theory]
+    [InlineData(DiscoveryRequest.StateDownloading)]
+    [InlineData(DiscoveryRequest.StateFailed)]
+    [InlineData(DiscoveryRequest.StateRequested)]
+    public async Task SetState_NeverLeavesDone(string state)
+    {
+        await _store.RequestAsync(41, Guid.NewGuid(), Ct);
+        await _store.SetStateAsync(41, DiscoveryRequest.StateDone, Ct);
+
+        // A report that raced the done marking: the request stays done.
+        Assert.Equal(DiscoveryRequest.StateDone, (await _store.SetStateAsync(41, state, Ct))!.State);
+        Assert.Equal(DiscoveryRequest.StateDone, (await _store.GetAsync(41, Ct))!.State);
+    }
+
     [Fact]
     public async Task RemoveUser_DropsOnlyTheirRequesterRows()
     {

@@ -14,9 +14,10 @@ namespace Emby.Server.Implementations.Discovery;
 /// <summary>
 /// Fork: the Download action (kind <see cref="ItemAction.RequestKind"/>). It is offered on virtual discovery films while
 /// the discovery app has downloads enabled, until the film is in a library. Its state follows the film's request:
-/// <see cref="StateAvailable"/> (none yet, or the last attempt failed; the only enabled state),
-/// <see cref="StateRequested"/> or <see cref="StateDownloading"/>. Posting it adds the user as a requester, records the
-/// request and saves the film to that user's Saved. The server never calls Radarr: the app picks requests up.
+/// <see cref="StateAvailable"/> (none yet), <see cref="StateFailed"/> (the last attempt failed), both enabled, or
+/// <see cref="StateRequested"/> or <see cref="StateDownloading"/>, disabled for everyone (anyone else uses Save).
+/// Posting it adds the user as a requester, records the request and saves the film to that user's Saved. The action
+/// never says who asked. The server never calls Radarr: the app picks requests up.
 /// </summary>
 public sealed class DownloadAction : IItemActionProvider
 {
@@ -31,6 +32,11 @@ public sealed class DownloadAction : IItemActionProvider
     public const string StateAvailable = "available";
 
     /// <summary>
+    /// The state of a film whose last download attempt failed; it can be requested again.
+    /// </summary>
+    public const string StateFailed = "failed";
+
+    /// <summary>
     /// The state of a film requested and not yet picked up by the app.
     /// </summary>
     public const string StateRequested = "requested";
@@ -43,6 +49,7 @@ public sealed class DownloadAction : IItemActionProvider
     private static readonly IReadOnlyDictionary<string, string> _labels = new Dictionary<string, string>
     {
         [StateAvailable] = "Download",
+        [StateFailed] = "Retry download",
         [StateRequested] = "Requested",
         [StateDownloading] = "Downloading",
     };
@@ -106,14 +113,14 @@ public sealed class DownloadAction : IItemActionProvider
         }
 
         // Under the film sync's lock, like Save, so a sync can't delete the film between the check and the request: a
-        // film that is gone by now (its list rotated out and the sync ran) isn't requested. Once the request and the
-        // save are recorded, the sync keeps the film.
+        // film that is gone by now (its list rotated out and the sync ran) isn't requested, and nothing is performed
+        // (null: the controller answers 400). Once the request and the save are recorded, the sync keeps the film.
         var request = await _filmSync.RunExclusiveAsync(
             async () =>
             {
                 if (_filmSync.FindFilm(tmdbId) is not { } film)
                 {
-                    return await _requests.GetAsync(tmdbId, cancellationToken).ConfigureAwait(false);
+                    return null;
                 }
 
                 var requested = await _requests.RequestAsync(tmdbId, user.Id, cancellationToken).ConfigureAwait(false);
@@ -124,17 +131,18 @@ public sealed class DownloadAction : IItemActionProvider
             },
             cancellationToken).ConfigureAwait(false);
 
-        return Create(request?.State);
+        return request is null ? null : Create(request.State);
     }
 
-    // No request, a failed one or a done one (its film left the library again): Download, enabled. Otherwise the
-    // request's state, disabled.
+    // No request, or a done one (its film left the library again): Download. A failed one: Retry download. Both
+    // enabled. Otherwise the request's state, disabled.
     private static ItemAction Create(string? requestState)
     {
         var state = requestState switch
         {
             DiscoveryRequest.StateRequested => StateRequested,
             DiscoveryRequest.StateDownloading => StateDownloading,
+            DiscoveryRequest.StateFailed => StateFailed,
             _ => StateAvailable,
         };
 
@@ -142,7 +150,7 @@ public sealed class DownloadAction : IItemActionProvider
         {
             State = state,
             Labels = _labels,
-            Enabled = state == StateAvailable,
+            Enabled = state is StateAvailable or StateFailed,
         };
     }
 

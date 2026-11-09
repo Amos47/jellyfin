@@ -115,9 +115,23 @@ public sealed class DownloadRequestsTests : IClassFixture<JellyfinApplicationFac
             Assert.Equal(new[] { 5011 }, FilmTmdbIds(await GetSavedAsync(userClient)));
             Assert.Empty(FilmTmdbIds(await GetSavedAsync(client)));
 
-            // The request is per film: the admin sees it requested too.
+            // The request is per film: the admin sees it requested too, disabled (they use Save instead).
             var adminView = FindDownload(await GetAsync<JsonArray>(client, $"Items/{filmId:N}/Actions"));
             Assert.Equal("requested", (string?)adminView!["State"]);
+            Assert.False((bool)adminView["Enabled"]!);
+
+            // The action never names who asked: no requester id anywhere in its JSON, for anyone.
+            foreach (var json in new[]
+            {
+                requested.ToJsonString(),
+                adminView.ToJsonString(),
+                (await GetAsync<JsonArray>(userClient, $"Items/{filmId:N}/Actions")).ToJsonString(),
+            })
+            {
+                Assert.DoesNotContain(user.Id.ToString("N"), json, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(user.Id.ToString("D"), json, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain("UserIds", json, StringComparison.Ordinal);
+            }
 
             var request = await GetRequestAsync(client, "requested", 5011);
             Assert.NotNull(request);
@@ -195,8 +209,9 @@ public sealed class DownloadRequestsTests : IClassFixture<JellyfinApplicationFac
             await PutRequestAsync(client, 5031, "failed", HttpStatusCode.NoContent);
 
             var failed = FindDownload(await GetAsync<JsonArray>(client, url))!;
-            Assert.Equal("available", (string?)failed["State"]);
-            Assert.Equal("Download", (string?)failed["Label"]);
+            Assert.Equal("failed", (string?)failed["State"]);
+            Assert.Equal("Retry download", (string?)failed["Label"]);
+            Assert.Equal("Retry download", (string?)failed["Labels"]!["failed"]);
             Assert.True((bool)failed["Enabled"]!);
             Assert.NotNull(await GetRequestAsync(client, "failed", 5031));
 

@@ -136,7 +136,10 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
                     return null;
                 }
 
-                if (!string.Equals(entity.State, state, StringComparison.Ordinal))
+                // Done is final here: a report that raced the done marking must not reopen the request. Only a new
+                // request (RequestAsync) does, once the film has left the library.
+                if (!string.Equals(entity.State, state, StringComparison.Ordinal)
+                    && !string.Equals(entity.State, DiscoveryRequest.StateDone, StringComparison.Ordinal))
                 {
                     entity.State = state;
                     entity.UpdatedAt = DateTime.UtcNow;
