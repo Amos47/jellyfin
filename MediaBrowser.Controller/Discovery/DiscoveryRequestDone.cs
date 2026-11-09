@@ -1,6 +1,8 @@
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Model.Entities;
 
 namespace MediaBrowser.Controller.Discovery;
@@ -80,6 +82,11 @@ public static class DiscoveryRequestDone
         System.ArgumentNullException.ThrowIfNull(filmSync);
 
         var imdbId = filmSync.FindTitle(tmdbId, type)?.GetProviderId(MetadataProvider.Imdb);
-        return filmSync.FindOwnedTitle(tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, type) is not null;
+        var owned = filmSync.FindOwnedTitle(tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, type);
+
+        // A show counts once it has an episode: Sonarr adds the folder before anything downloads.
+        return type == DiscoveryMediaType.Series
+            ? owned is Folder folder && folder.GetRecursiveChildren(i => i is Episode).Count > 0
+            : owned is not null;
     }
 }

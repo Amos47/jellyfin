@@ -245,6 +245,11 @@ public class UserDiscoveryController : BaseJellyfinApiController
         CancellationToken cancellationToken,
         [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
+        if (!Enum.IsDefined(type))
+        {
+            return BadRequest("The type must be Movie or Series.");
+        }
+
         if (GetUser() is not { } user || tmdbId <= 0)
         {
             return NotFound();
@@ -300,6 +305,11 @@ public class UserDiscoveryController : BaseJellyfinApiController
         CancellationToken cancellationToken,
         [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
+        if (!Enum.IsDefined(type))
+        {
+            return BadRequest("The type must be Movie or Series.");
+        }
+
         if (GetUser() is not { } user
             || !await _userLists.RemoveFilmAsync(user.Id, listId, tmdbId, type, CancellationToken.None).ConfigureAwait(false))
         {

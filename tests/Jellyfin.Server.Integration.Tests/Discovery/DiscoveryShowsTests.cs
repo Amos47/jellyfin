@@ -144,6 +144,19 @@ public sealed class DiscoveryShowsTests : IClassFixture<JellyfinApplicationFacto
                 LibraryManager.GetItemList(new InternalItemsQuery { Recursive = true, IncludeItemTypes = [BaseItemKind.Series] }),
                 i => i.Id.Equals(show.Id));
 
+            // Genres, studios, Next Up and Resume leave it out too.
+            show.Genres = ["Zebrafish Genre"];
+            show.Studios = ["Zebrafish Studio"];
+            await show.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, Ct);
+            var genres = await GetAsync<JsonObject>(client, $"Genres?userId={user.Id:N}");
+            var studios = await GetAsync<JsonObject>(client, $"Studios?userId={user.Id:N}");
+            var nextUp = await GetAsync<JsonObject>(client, $"Shows/NextUp?userId={user.Id:N}");
+            var resume = await GetAsync<JsonObject>(client, $"UserItems/Resume?userId={user.Id:N}");
+            Assert.DoesNotContain(genres["Items"]!.AsArray(), g => (string?)g!["Name"] == "Zebrafish Genre");
+            Assert.DoesNotContain(studios["Items"]!.AsArray(), g => (string?)g!["Name"] == "Zebrafish Studio");
+            AssertHidden(show, nextUp["Items"]!.AsArray());
+            AssertHidden(show, resume["Items"]!.AsArray());
+
             // Its own page still resolves by id, as a virtual film's does.
             Assert.Equal(show.Id, Guid.Parse((string)(await GetAsync<JsonObject>(client, $"Items/{show.Id:N}?userId={user.Id:N}"))["Id"]!));
         }
@@ -151,6 +164,20 @@ public sealed class DiscoveryShowsTests : IClassFixture<JellyfinApplicationFacto
         {
             await DeleteListsAsync(client, "sh-hidden");
         }
+    }
+
+    [Fact]
+    public async Task UndefinedType_IsBadRequest()
+    {
+        var client = await SetUpAsync();
+        using var picks = await client.GetAsync("Discovery/Picks?type=2", Ct);
+        using var films = await client.GetAsync("Discovery/Films?type=2", Ct);
+        using var requests = await client.GetAsync("Discovery/Requests?type=2", Ct);
+        using var delTrailer = await client.DeleteAsync("Discovery/Films/1/Trailer?type=2", Ct);
+        Assert.Equal(HttpStatusCode.BadRequest, picks.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, films.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, requests.StatusCode);
+        Assert.Equal(HttpStatusCode.BadRequest, delTrailer.StatusCode);
     }
 
     [Fact]
@@ -342,6 +369,10 @@ public sealed class DiscoveryShowsTests : IClassFixture<JellyfinApplicationFacto
 
             // The show arrives in a library: the Series request is done, the film's is not.
             owned = await AddLibrarySeriesAsync(8501);
+
+            // An empty folder (Sonarr added the series, nothing downloaded yet) is not done; the first episode makes it so.
+            Assert.Equal("requested", (string?)(await GetRequestAsync(client, 8501, "Series"))!["State"]);
+            AddLibraryEpisode(owned);
             Assert.Equal("done", (string?)(await GetRequestAsync(client, 8501, "Series"))!["State"]);
             Assert.Equal("requested", (string?)(await GetRequestAsync(client, 8501, "Movie"))!["State"]);
             Assert.Equal(owned.Id, Sync.FindOwnedTitle(8501, null, DiscoveryMediaType.Series)!.Id);
@@ -547,6 +578,20 @@ public sealed class DiscoveryShowsTests : IClassFixture<JellyfinApplicationFacto
         var folder = (Folder)LibraryManager.GetItemById(seed.RealFilm.ParentId)!;
         folder.AddChild(show);
         return show;
+    }
+
+    private void AddLibraryEpisode(Series series)
+    {
+        var path = Path.Combine(series.Path, "episode-1.mkv");
+        var episode = new Episode
+        {
+            Name = "Episode 1",
+            Path = path,
+            Id = LibraryManager.GetNewItemId(path, typeof(Episode)),
+            SeriesId = series.Id,
+            ParentId = series.Id,
+        };
+        series.AddChild(episode);
     }
 
     private void SetTrailerRoot(string? root)

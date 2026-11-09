@@ -101,6 +101,11 @@ public partial class DiscoveryController : BaseJellyfinApiController
         CancellationToken cancellationToken,
         [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
+        if (!Enum.IsDefined(type))
+        {
+            return BadRequest("The type must be Movie or Series.");
+        }
+
         var day = date ?? DateOnly.FromDateTime(DateTime.Now).AddDays(1);
         var tmdbIds = new List<int>();
         var seen = new HashSet<int>();
@@ -165,6 +170,11 @@ public partial class DiscoveryController : BaseJellyfinApiController
         CancellationToken cancellationToken,
         [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
+        if (!Enum.IsDefined(type))
+        {
+            return BadRequest("The type must be Movie or Series.");
+        }
+
         var lists = await _store.GetListsAsync(cancellationToken).ConfigureAwait(false);
         var shown = type == DiscoveryMediaType.Movie
             ? await _store.GetShownAsync(cancellationToken).ConfigureAwait(false)
@@ -384,6 +394,11 @@ public partial class DiscoveryController : BaseJellyfinApiController
         CancellationToken cancellationToken,
         [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
+        if (!Enum.IsDefined(type))
+        {
+            return BadRequest("The type must be Movie or Series.");
+        }
+
         // A show's trailer goes on the virtual show of that TMDB id, never on a film with the same id.
         var result = type == DiscoveryMediaType.Movie
             ? await _trailers.SetAsync(tmdbId, trailer.Path ?? string.Empty, cancellationToken).ConfigureAwait(false)
@@ -418,6 +433,11 @@ public partial class DiscoveryController : BaseJellyfinApiController
         CancellationToken cancellationToken,
         [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
+        if (!Enum.IsDefined(type))
+        {
+            return BadRequest("The type must be Movie or Series.");
+        }
+
         if (type == DiscoveryMediaType.Movie)
         {
             await _trailers.RemoveAsync(tmdbId, cancellationToken).ConfigureAwait(false);
@@ -450,6 +470,11 @@ public partial class DiscoveryController : BaseJellyfinApiController
         CancellationToken cancellationToken,
         [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
+        if (!Enum.IsDefined(type))
+        {
+            return BadRequest("The type must be Movie or Series.");
+        }
+
         if (state is not null && !DiscoveryRequest.IsState(state))
         {
             return BadRequest("The state must be requested, downloading, failed or done.");
@@ -489,6 +514,11 @@ public partial class DiscoveryController : BaseJellyfinApiController
         CancellationToken cancellationToken,
         [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
+        if (!Enum.IsDefined(type))
+        {
+            return BadRequest("The type must be Movie or Series.");
+        }
+
         if (update.State is not (DiscoveryRequest.StateDownloading or DiscoveryRequest.StateFailed))
         {
             return BadRequest("The state must be downloading or failed.");
