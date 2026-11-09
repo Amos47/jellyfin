@@ -1,3 +1,4 @@
+using System;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
@@ -13,11 +14,23 @@ public interface IDiscoveryFilmSync
 {
     /// <summary>
     /// Makes sure a virtual film exists for every TMDB id in any list, and deletes the virtual films (and their
-    /// extras) that are in no list. Library films are never touched.
+    /// extras) that are in no list. Films in any user's list (<see cref="IUserListStore"/>) and films with a request
+    /// that isn't done (<see cref="IDiscoveryRequestStore"/>) are kept, not created. Library films are never touched.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task.</returns>
     Task SyncAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Runs work while no sync runs: a sync reads which films user lists and requests keep and deletes the rest under the same lock,
+    /// so a film added to a user list here is either seen by the sync or was already deleted before the work started
+    /// (the work checks that the film still exists before adding it). The work must not start a sync.
+    /// </summary>
+    /// <typeparam name="T">The result type.</typeparam>
+    /// <param name="work">The work.</param>
+    /// <param name="cancellationToken">The cancellation token, for waiting on the lock.</param>
+    /// <returns>The work's result.</returns>
+    Task<T> RunExclusiveAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken);
 
     /// <summary>
     /// Gets the virtual discovery film of a TMDB id.
@@ -41,4 +54,13 @@ public interface IDiscoveryFilmSync
     /// <param name="imdbId">The IMDb id, if known.</param>
     /// <returns>The library film, or null if the user has none.</returns>
     BaseItem? FindOwned(User user, int tmdbId, string? imdbId);
+
+    /// <summary>
+    /// Gets a film in any library with a matching TMDB or IMDb id, whoever may see it: used to tell that a requested
+    /// film has been downloaded.
+    /// </summary>
+    /// <param name="tmdbId">The TMDB id.</param>
+    /// <param name="imdbId">The IMDb id, if known.</param>
+    /// <returns>The library film, or null if there is none.</returns>
+    BaseItem? FindOwned(int tmdbId, string? imdbId);
 }

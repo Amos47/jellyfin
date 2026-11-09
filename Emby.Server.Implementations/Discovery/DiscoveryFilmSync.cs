@@ -18,7 +18,9 @@ namespace Emby.Server.Implementations.Discovery;
 
 /// <summary>
 /// Fork: creates a pathless virtual <see cref="Movie"/> in the discovery folder for every TMDB id in a discovery
-/// list, and deletes the virtual films (with their extras) that are in no list. Library films are never touched.
+/// list, and deletes the virtual films (with their extras) that are in no list. A film in any user's list (such as
+/// Saved), or with a download request that isn't done, is kept even when no discovery list has it any more. Library
+/// films are never touched.
 /// </summary>
 public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
 {
@@ -26,6 +28,8 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
 
     private readonly ILibraryManager _libraryManager;
     private readonly IDiscoveryStore _store;
+    private readonly IUserListStore _userLists;
+    private readonly IDiscoveryRequestStore _requests;
     private readonly IDiscoveryFolderLocator _folderLocator;
     private readonly IDiscoveryMetadataRefresher _refresher;
     private readonly ILogger<DiscoveryFilmSync> _logger;
@@ -36,18 +40,24 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
     /// </summary>
     /// <param name="libraryManager">The library manager.</param>
     /// <param name="store">The discovery store.</param>
+    /// <param name="userLists">The user list store, whose films are kept.</param>
+    /// <param name="requests">The download request store, whose active requests' films are kept.</param>
     /// <param name="folderLocator">The discovery folder locator.</param>
     /// <param name="refresher">The metadata refresher.</param>
     /// <param name="logger">The logger.</param>
     public DiscoveryFilmSync(
         ILibraryManager libraryManager,
         IDiscoveryStore store,
+        IUserListStore userLists,
+        IDiscoveryRequestStore requests,
         IDiscoveryFolderLocator folderLocator,
         IDiscoveryMetadataRefresher refresher,
         ILogger<DiscoveryFilmSync> logger)
     {
         _libraryManager = libraryManager;
         _store = store;
+        _userLists = userLists;
+        _requests = requests;
         _folderLocator = folderLocator;
         _refresher = refresher;
         _logger = logger;
@@ -75,7 +85,12 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
                 }
             }
 
-            var wantedIds = wanted.Keys.Select(GetFilmId).ToHashSet();
+            // Films in a user's list or with a request that isn't done are kept, though not created: they were discovery
+            // films when they were saved or requested. Read under the sync lock, which saves and requests take too
+            // (RunExclusiveAsync), so a film saved or requested meanwhile is never deleted.
+            var listed = await _userLists.GetListedTmdbIdsAsync(cancellationToken).ConfigureAwait(false);
+            var requested = await _requests.GetActiveTmdbIdsAsync(cancellationToken).ConfigureAwait(false);
+            var wantedIds = wanted.Keys.Concat(listed).Concat(requested).Select(GetFilmId).ToHashSet();
             var folder = _folderLocator.GetFolder();
 
             foreach (var film in GetFilms(folder.Id))
@@ -102,6 +117,22 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
                     await existing.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, cancellationToken).ConfigureAwait(false);
                 }
             }
+        }
+        finally
+        {
+            _syncLock.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<T> RunExclusiveAsync<T>(Func<Task<T>> work, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(work);
+
+        await _syncLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            return await work().ConfigureAwait(false);
         }
         finally
         {
@@ -140,7 +171,15 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
     public BaseItem? FindOwned(User user, int tmdbId, string? imdbId)
     {
         ArgumentNullException.ThrowIfNull(user);
+        return QueryOwned(new InternalItemsQuery(user), tmdbId, imdbId);
+    }
 
+    /// <inheritdoc />
+    public BaseItem? FindOwned(int tmdbId, string? imdbId)
+        => QueryOwned(new InternalItemsQuery(), tmdbId, imdbId);
+
+    private BaseItem? QueryOwned(InternalItemsQuery query, int tmdbId, string? imdbId)
+    {
         var providerIds = new Dictionary<string, string>
         {
             [MetadataProvider.Tmdb.ToString()] = tmdbId.ToString(CultureInfo.InvariantCulture),
@@ -150,16 +189,14 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
             providerIds[MetadataProvider.Imdb.ToString()] = imdbId;
         }
 
-        // A normal user query: the discovery guard keeps the virtual films out, so only library films match.
-        var owned = _libraryManager.GetItemList(new InternalItemsQuery(user)
-        {
-            IncludeItemTypes = [BaseItemKind.Movie],
-            Recursive = true,
-            IsVirtualItem = false,
-            HasAnyProviderId = providerIds,
-            Limit = 1,
-            DtoOptions = new DtoOptions(false),
-        });
+        // The discovery guard (no IncludeDiscovery) keeps the virtual films out, so only library films match.
+        query.IncludeItemTypes = [BaseItemKind.Movie];
+        query.Recursive = true;
+        query.IsVirtualItem = false;
+        query.HasAnyProviderId = providerIds;
+        query.Limit = 1;
+        query.DtoOptions = new DtoOptions(false);
+        var owned = _libraryManager.GetItemList(query);
         return owned.Count > 0 ? owned[0] : null;
     }
 

@@ -7,4 +7,5 @@ namespace Jellyfin.Api.Models.ItemActionDtos;
 /// The items a play-queue action plays.
 /// </summary>
 /// <param name="ItemIds">The item ids, in play order.</param>
-public sealed record ItemActionQueueDto(IReadOnlyList<Guid> ItemIds);
+/// <param name="Items">The same items, in the same order, with the names a player shows.</param>
+public sealed record ItemActionQueueDto(IReadOnlyList<Guid> ItemIds, IReadOnlyList<ItemActionQueueItemDto> Items);

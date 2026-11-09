@@ -42,6 +42,8 @@ public partial class DiscoveryController : BaseJellyfinApiController
     private readonly IDiscoveryUserPicks _picks;
     private readonly IDiscoveryRowPlanner _planner;
     private readonly IDiscoveryUserSettings _settings;
+    private readonly IDiscoveryRequestStore _requests;
+    private readonly IUserListStore _userLists;
     private readonly IUserManager _userManager;
     private readonly ILogger<DiscoveryController> _logger;
 
@@ -54,6 +56,8 @@ public partial class DiscoveryController : BaseJellyfinApiController
     /// <param name="picks">Instance of the <see cref="IDiscoveryUserPicks"/> interface.</param>
     /// <param name="planner">Instance of the <see cref="IDiscoveryRowPlanner"/> interface.</param>
     /// <param name="settings">Instance of the <see cref="IDiscoveryUserSettings"/> interface.</param>
+    /// <param name="requests">Instance of the <see cref="IDiscoveryRequestStore"/> interface.</param>
+    /// <param name="userLists">Instance of the <see cref="IUserListStore"/> interface.</param>
     /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
     /// <param name="logger">Instance of the <see cref="ILogger{DiscoveryController}"/> interface.</param>
     public DiscoveryController(
@@ -63,6 +67,8 @@ public partial class DiscoveryController : BaseJellyfinApiController
         IDiscoveryUserPicks picks,
         IDiscoveryRowPlanner planner,
         IDiscoveryUserSettings settings,
+        IDiscoveryRequestStore requests,
+        IUserListStore userLists,
         IUserManager userManager,
         ILogger<DiscoveryController> logger)
     {
@@ -72,6 +78,8 @@ public partial class DiscoveryController : BaseJellyfinApiController
         _picks = picks;
         _planner = planner;
         _settings = settings;
+        _requests = requests;
+        _userLists = userLists;
         _userManager = userManager;
         _logger = logger;
     }
@@ -369,6 +377,121 @@ public partial class DiscoveryController : BaseJellyfinApiController
         await _trailers.RemoveAsync(tmdbId, cancellationToken).ConfigureAwait(false);
         _planner.InvalidateReadiness();
         return NoContent();
+    }
+
+    /// <summary>
+    /// Gets the download requests, most recently changed first. Requests whose film is now in a library are marked
+    /// done first.
+    /// </summary>
+    /// <param name="state">Optional: only the requests in this state (requested, downloading, failed or done).</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="200">Requests returned.</response>
+    /// <response code="400">The state is unknown.</response>
+    /// <returns>The requests.</returns>
+    [HttpGet("Requests")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<DiscoveryRequestDto[]>> GetRequests([FromQuery] string? state, CancellationToken cancellationToken)
+    {
+        if (state is not null && !DiscoveryRequest.IsState(state))
+        {
+            return BadRequest("The state must be requested, downloading, failed or done.");
+        }
+
+        // Every active request is checked, so one that just finished leaves the requested or downloading list.
+        var all = await _requests.GetAllAsync(null, cancellationToken).ConfigureAwait(false);
+        var current = await DiscoveryRequestDone.CheckAllAsync(_requests, _filmSync, all, cancellationToken).ConfigureAwait(false);
+        return Ok(current
+            .Where(r => state is null || string.Equals(r.State, state, StringComparison.Ordinal))
+            .Select(r => new DiscoveryRequestDto(r.TmdbId, r.State, r.UpdatedAt, r.UserIds))
+            .ToArray());
+    }
+
+    /// <summary>
+    /// Reports the progress of a download request: <c>downloading</c> once Radarr has it, or <c>failed</c>, which
+    /// offers Download again. A done request stays done.
+    /// </summary>
+    /// <param name="tmdbId">The TMDB id of the film.</param>
+    /// <param name="update">The new state.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="204">State set.</response>
+    /// <response code="400">The state is not downloading or failed.</response>
+    /// <response code="404">Nobody requested the film.</response>
+    /// <response code="409">The request is done: the film is in a library.</response>
+    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    [HttpPut("Requests/{tmdbId}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<ActionResult> SetRequestState(
+        [FromRoute, Required] int tmdbId,
+        [FromBody, Required] DiscoveryRequestUpdateDto update,
+        CancellationToken cancellationToken)
+    {
+        if (update.State is not (DiscoveryRequest.StateDownloading or DiscoveryRequest.StateFailed))
+        {
+            return BadRequest("The state must be downloading or failed.");
+        }
+
+        var request = await _requests.GetAsync(tmdbId, cancellationToken).ConfigureAwait(false);
+        request = await DiscoveryRequestDone.CheckAsync(_requests, _filmSync, request, cancellationToken).ConfigureAwait(false);
+        if (request is null)
+        {
+            return NotFound();
+        }
+
+        if (!request.IsActive)
+        {
+            return Conflict("The request is done: the film is in a library.");
+        }
+
+        // Not the request's token: once reported, the state stands even if the client hangs up. The store keeps a
+        // request that was marked done meanwhile done.
+        var updated = await _requests.SetStateAsync(tmdbId, update.State, CancellationToken.None).ConfigureAwait(false);
+        return updated is { IsActive: false } ? Conflict("The request is done: the film is in a library.") : NoContent();
+    }
+
+    /// <summary>
+    /// Sets whether downloads are enabled. The discovery app sets it at startup, true only when its download
+    /// configuration is complete; while it is off, discovery films offer no Download. Off until first set.
+    /// </summary>
+    /// <param name="setting">The setting.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="204">Setting saved.</response>
+    /// <response code="400">Enabled is missing.</response>
+    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    [HttpPut("Settings/Downloads")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult> SetDownloadsSetting([FromBody, Required] DiscoveryDownloadsSettingDto setting, CancellationToken cancellationToken)
+    {
+        if (setting.Enabled is not { } enabled)
+        {
+            return BadRequest("Enabled is required.");
+        }
+
+        await _requests.SetDownloadsEnabledAsync(enabled, CancellationToken.None).ConfigureAwait(false);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Gets the films the discovery app must never delete: the ones saved in anyone's list, and the ones with a
+    /// download request that isn't done (failed ones included). Requests whose film is now in a library are marked done
+    /// first.
+    /// </summary>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="200">Films returned.</response>
+    /// <returns>The TMDB ids, ascending.</returns>
+    [HttpGet("Protected")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    public async Task<ActionResult<DiscoveryProtectedDto>> GetProtected(CancellationToken cancellationToken)
+    {
+        var saved = await _userLists.GetListedTmdbIdsAsync(cancellationToken).ConfigureAwait(false);
+        var all = await _requests.GetAllAsync(null, cancellationToken).ConfigureAwait(false);
+        var current = await DiscoveryRequestDone.CheckAllAsync(_requests, _filmSync, all.Where(r => r.IsActive), cancellationToken).ConfigureAwait(false);
+        var ids = saved.Concat(current.Where(r => r.IsActive).Select(r => r.TmdbId)).Distinct().Order().ToArray();
+        return Ok(new DiscoveryProtectedDto(ids));
     }
 
     private static bool IsValidId(string id) => ListIdRegex().IsMatch(id);

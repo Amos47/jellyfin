@@ -43,4 +43,7 @@ public static class HomeRowProviderIds
 
     /// <summary>Movie discovery: one row per picked discovery list.</summary>
     public const string MovieDiscovery = "movie-discovery";
+
+    /// <summary>One of the user's named lists, such as Saved.</summary>
+    public const string UserList = "user-list";
 }

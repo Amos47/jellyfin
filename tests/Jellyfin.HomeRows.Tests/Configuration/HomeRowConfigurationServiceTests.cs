@@ -21,6 +21,7 @@ using MediaBrowser.Controller.Library;
 using MediaBrowser.Model.Library;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Moq;
 using Xunit;
@@ -105,9 +106,10 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
                 HomeRowProviderIds.NextUp,
                 HomeRowProviderIds.LatestMedia,
                 HomeRowProviderIds.LatestMedia,
+                HomeRowProviderIds.UserList,
             },
             layout.Rows.Select(r => r.Row.Provider));
-        Assert.Equal(new[] { Library(_movies), Library(_shows) }, layout.Rows.Skip(6).Select(r => (string?)r.Row.Config["library"]));
+        Assert.Equal(new[] { Library(_movies), Library(_shows) }, layout.Rows.Skip(6).Take(2).Select(r => (string?)r.Row.Config["library"]));
         Assert.True(layout.Rows[1].IsAvailable);
         Assert.False(layout.Rows[0].IsAvailable);
     }
@@ -138,7 +140,7 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
 
         Assert.Equal(HomeRowLayoutSource.UpstreamSections, layout.Source);
         Assert.Equal(
-            new[] { HomeRowProviderIds.LatestMedia, HomeRowProviderIds.LatestMedia, HomeRowProviderIds.Resume },
+            new[] { HomeRowProviderIds.LatestMedia, HomeRowProviderIds.LatestMedia, HomeRowProviderIds.Resume, HomeRowProviderIds.UserList },
             layout.Rows.Select(r => r.Row.Provider));
     }
 
@@ -436,7 +438,7 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
         await service.FindRowAsync(_admin, Guid.NewGuid(), Ct);
 
         Assert.Equal(HomeRowLayoutSource.UpstreamSections, withSections.Source);
-        Assert.Equal(new[] { HomeRowProviderIds.Resume }, withSections.Rows.Select(r => r.Row.Provider));
+        Assert.Equal(new[] { HomeRowProviderIds.Resume, HomeRowProviderIds.UserList }, withSections.Rows.Select(r => r.Row.Provider));
         Assert.Equal(HomeRowLayoutSource.StandardDefault, withoutRow.Source);
         Assert.Equal((1, 1), before);
         Assert.Equal(before, await CountPreferencesAsync());
@@ -909,6 +911,112 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
         Assert.DoesNotContain(upstream.Rows, r => r.Row.Provider == Expanding || r.Row.Provider == HomeRowProviderIds.MovieDiscovery);
     }
 
+    [Fact]
+    public async Task UserListRow_InsertedOnceAfterDiscovery()
+    {
+        // Alice has Movie discovery mid-layout, Bob has none, the admin default has it last; the admin's own layout
+        // already has a user-list row.
+        var discovery = Guid.NewGuid();
+        await StoreUserJsonAsync(_user.Id, Json(Stored(Guid.NewGuid(), HomeRowProviderIds.Resume), Stored(discovery, HomeRowProviderIds.MovieDiscovery), Stored(Guid.NewGuid(), HomeRowProviderIds.NextUp)));
+        await StoreUserJsonAsync(_other.Id, Json(Stored(Guid.NewGuid(), HomeRowProviderIds.Resume)));
+        await StoreUserJsonAsync(_admin.Id, Json(Stored(Guid.NewGuid(), HomeRowProviderIds.UserList), Stored(Guid.NewGuid(), HomeRowProviderIds.MovieDiscovery)));
+        await StoreDefaultJsonAsync(Json(Stored(Guid.NewGuid(), HomeRowProviderIds.MovieDiscovery)));
+        var service = CreateService();
+
+        Assert.True(await service.InsertUserListRowsOnceAsync(Ct));
+
+        var alice = (await service.GetEffectiveLayoutAsync(_user, Ct)).Rows.Select(r => r.Row).ToList();
+        Assert.Equal(
+            new[] { HomeRowProviderIds.Resume, HomeRowProviderIds.MovieDiscovery, HomeRowProviderIds.UserList, HomeRowProviderIds.NextUp },
+            alice.Select(r => r.Provider));
+        var inserted = alice[2];
+        Assert.True(inserted.Enabled);
+        Assert.Null(inserted.Title);
+        Assert.Empty(inserted.Config);
+        Assert.False(HomeRowConfigurationService.HasDerivedRowPrefix(discovery, inserted.Id));
+        Assert.Equal(
+            new[] { HomeRowProviderIds.Resume, HomeRowProviderIds.UserList },
+            (await service.GetEffectiveLayoutAsync(_other, Ct)).Rows.Select(r => r.Row.Provider));
+        Assert.Equal(
+            new[] { HomeRowProviderIds.UserList, HomeRowProviderIds.MovieDiscovery },
+            (await service.GetEffectiveLayoutAsync(_admin, Ct)).Rows.Select(r => r.Row.Provider));
+        Assert.Equal(
+            new[] { HomeRowProviderIds.MovieDiscovery, HomeRowProviderIds.UserList },
+            (await service.GetAdminDefaultAsync(Ct))!.Select(r => r.Provider));
+
+        // Alice removes the row; the insert never runs again, on this service or a new one (a restart).
+        await StoreUserJsonAsync(_user.Id, Json(Stored(Guid.NewGuid(), HomeRowProviderIds.Resume)));
+        Assert.False(await service.InsertUserListRowsOnceAsync(Ct));
+        Assert.False(await CreateService().InsertUserListRowsOnceAsync(Ct));
+        Assert.Equal(
+            new[] { HomeRowProviderIds.Resume },
+            (await service.GetEffectiveLayoutAsync(_user, Ct)).Rows.Select(r => r.Row.Provider));
+    }
+
+    [Fact]
+    public async Task Effective_StandardDefault_EndsWithSavedRow_NothingStored()
+    {
+        var service = CreateService();
+
+        var first = await service.GetEffectiveLayoutAsync(_user, Ct);
+        var second = await service.GetEffectiveLayoutAsync(_other, Ct);
+
+        Assert.Equal(HomeRowLayoutSource.StandardDefault, first.Source);
+        var saved = first.Rows[^1].Row;
+        Assert.Equal(HomeRowProviderIds.UserList, saved.Provider);
+        Assert.True(saved.Enabled);
+        Assert.Empty(saved.Config);
+        Assert.Equal(saved.Id, second.Rows[^1].Row.Id);
+        Assert.Single(first.Rows, r => r.Row.Provider == HomeRowProviderIds.UserList);
+        await AssertNothingStoredAsync();
+    }
+
+    [Fact]
+    public async Task Effective_UpstreamSections_SavedRowAtReadTimeOnly()
+    {
+        AddSections(_user.Id, "emby", Section(1, 0, HomeSectionType.Resume), Section(2, 1, HomeSectionType.NextUp));
+        var before = await CountPreferencesAsync();
+
+        var layout = await CreateService().GetEffectiveLayoutAsync(_user, Ct);
+
+        Assert.Equal(HomeRowLayoutSource.UpstreamSections, layout.Source);
+        Assert.Equal(
+            new[] { HomeRowProviderIds.Resume, HomeRowProviderIds.NextUp, HomeRowProviderIds.UserList },
+            layout.Rows.Select(r => r.Row.Provider));
+        Assert.Equal(before, await CountPreferencesAsync());
+        await AssertNothingStoredAsync();
+    }
+
+    [Fact]
+    public async Task Effective_UpstreamSections_Full_NoSavedRow()
+    {
+        AddSections(_user.Id, "emby", Enumerable.Range(0, UpstreamHomeSectionMapper.MaxRows).Select(i => Section(i + 1, i, HomeSectionType.Resume)).ToArray());
+
+        var layout = await CreateService().GetEffectiveLayoutAsync(_user, Ct);
+
+        Assert.Equal(UpstreamHomeSectionMapper.MaxRows, layout.Rows.Count);
+        Assert.DoesNotContain(layout.Rows, r => r.Row.Provider == HomeRowProviderIds.UserList);
+    }
+
+    [Fact]
+    public async Task UserListRow_FullStoredLayout_SkippedAndLogged()
+    {
+        var full = Enumerable.Range(0, UpstreamHomeSectionMapper.MaxRows).Select(_ => Stored(Guid.NewGuid(), HomeRowProviderIds.NextUp)).ToArray();
+        await StoreUserJsonAsync(_user.Id, Json(full));
+        var logger = new ListLogger();
+
+        Assert.True(await CreateService(logger: logger).InsertUserListRowsOnceAsync(Ct));
+
+        Assert.DoesNotContain((await CreateService().GetEffectiveLayoutAsync(_user, Ct)).Rows, r => r.Row.Provider == HomeRowProviderIds.UserList);
+        Assert.Contains(logger.Messages, m => m.Level == LogLevel.Warning && m.Text.Contains(_user.Id.ToString(), StringComparison.Ordinal));
+    }
+
+    private static JsonObject Stored(Guid id, string provider)
+        => new() { ["id"] = id.ToString("D"), ["provider"] = provider, ["title"] = null, ["config"] = new JsonObject(), ["enabled"] = true };
+
+    private static string Json(params JsonObject[] rows)
+        => new JsonArray(rows.Select(r => (JsonNode)r).ToArray()).ToJsonString();
+
     private static string Library(Guid id) => id.ToString("N");
 
     private static HomeRowInstance Row(string provider, JsonObject? config = null)
@@ -924,7 +1032,7 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
         return provider.Object;
     }
 
-    private HomeRowConfigurationService CreateService(bool includeGone = false)
+    private HomeRowConfigurationService CreateService(bool includeGone = false, ILogger<HomeRowConfigurationService>? logger = null)
     {
         var providers = new List<IHomeRowProvider>
         {
@@ -945,7 +1053,7 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
             _jellyfinDbFactory,
             new HomeRowProviderFactory(providers),
             _userViews.Object,
-            NullLogger<HomeRowConfigurationService>.Instance);
+            logger ?? NullLogger<HomeRowConfigurationService>.Instance);
     }
 
     private void AddSections(Guid userId, string client, params HomeSection[] sections)
@@ -1068,5 +1176,19 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
             NullLogger<JellyfinDbContext>.Instance,
             new Mock<IJellyfinDatabaseProvider>().Object,
             new NoLockBehavior(NullLogger<NoLockBehavior>.Instance));
+    }
+
+    private sealed class ListLogger : ILogger<HomeRowConfigurationService>
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<(LogLevel Level, string Text)> Messages { get; } = new();
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull
+            => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+            => Messages.Enqueue((logLevel, formatter(state, exception)));
     }
 }

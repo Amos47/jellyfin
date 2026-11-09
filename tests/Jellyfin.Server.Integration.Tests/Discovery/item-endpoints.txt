@@ -26,9 +26,10 @@ GET /Artists/{name}  # by-name
 GET /Channels  # not-movies: channel folders
 GET /Channels/Items/Latest  # not-movies: channel items only
 GET /Channels/{channelId}/Items  # not-movies: channel items only
+GET /Discovery/Lists/{listId}/Page  # by-id: one discovery list's page, or one of the caller's own lists (user:{guid}, UserListsTests), by list id; its discovery films show by design, like a movie-discovery home row (UserDiscoveryTests)
 GET /Genres  # hidden: Genres_Studios_Persons_Exclude
 GET /Genres/{genreName}  # by-name: its MovieCount leaves discovery films out (Genres_Studios_Persons_Exclude)
-GET /HomeRows/{rowId}/Items  # hidden: every provider but movie-discovery (OtherHomeRows_Exclude); movie-discovery rows show them by design (HomeRowsDiscoveryTests)
+GET /HomeRows/{rowId}/Items  # hidden: every provider but movie-discovery and user-list (OtherHomeRows_Exclude); movie-discovery rows (HomeRowsDiscoveryTests) and a user's own saved films (UserListsTests) show them by design
 GET /Items  # hidden: DiscoveryGuardTests (recursive, parentId of the folder, search), Collections_Exclude, Trailers_Excludes; Person items credited only on discovery films are left out too, with or without a user and with a user's searchTerm (Genres_Studios_Persons_Exclude; shared cast stays, Persons_SharedCast_Listed); known gap: an API-key searchTerm loads unguarded search-provider ids by explicit ids, so it still lists them and the films' trailers; explicit ids bypass the guard by ruling (Items_ByIds_ReturnsDiscovery)
 GET /Items/Latest  # hidden: Latest_Excludes
 GET /Items/Root  # by-id: the user's root folder

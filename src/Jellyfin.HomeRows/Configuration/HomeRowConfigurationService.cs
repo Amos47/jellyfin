@@ -49,6 +49,10 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
     private const int DerivedRowPrefixLength = 4;
     private const string UpstreamSettingsClient = "emby";
     private const string UpstreamSettingsId = "usersettings";
+    private const string UserListRowMarker = "home-rows:user-list-row";
+
+    // The id of the Saved row of a layout that isn't stored: the same for every user and read.
+    private static readonly Guid _defaultUserListRowId = "default:user-list".GetMD5();
 
     private readonly IDbContextFactory<CustomDbContext> _dbFactory;
     private readonly IDbContextFactory<JellyfinDbContext> _jellyfinDbFactory;
@@ -102,9 +106,10 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
 
         var sections = await GetUpstreamSectionsAsync(user.Id, ct).ConfigureAwait(false);
         var latestViewIds = LatestViews.Get(user, _userViewManager).Select(v => v.Id).ToArray();
+        // Neither is stored, so the Saved row is added on every read (never written, here or to jellyfin.db).
         return sections.Any(s => s.Type != HomeSectionType.None)
-            ? ToLayout(HomeRowLayoutSource.UpstreamSections, UpstreamHomeSectionMapper.Map(sections.ToArray(), latestViewIds))
-            : ToLayout(HomeRowLayoutSource.StandardDefault, UpstreamHomeSectionMapper.Map([], latestViewIds));
+            ? ToLayout(HomeRowLayoutSource.UpstreamSections, WithDefaultUserListRow(UpstreamHomeSectionMapper.Map(sections.ToArray(), latestViewIds)))
+            : ToLayout(HomeRowLayoutSource.StandardDefault, WithDefaultUserListRow(UpstreamHomeSectionMapper.Map([], latestViewIds)));
     }
 
     /// <inheritdoc />
@@ -312,6 +317,48 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         return layout with { Rows = rows };
     }
 
+    /// <inheritdoc />
+    public async Task<bool> InsertUserListRowsOnceAsync(CancellationToken ct)
+    {
+        var context = await _dbFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using (context.ConfigureAwait(false))
+        {
+            // One transaction: the marker and every layout change land together, or none of them.
+            var transaction = await context.Database.BeginTransactionAsync(ct).ConfigureAwait(false);
+            await using (transaction.ConfigureAwait(false))
+            {
+                if (await context.Markers.AnyAsync(m => m.Id == UserListRowMarker, ct).ConfigureAwait(false))
+                {
+                    return false;
+                }
+
+                var now = DateTime.UtcNow;
+                foreach (var entity in await context.HomeRowConfigurations.ToListAsync(ct).ConfigureAwait(false))
+                {
+                    if (WithUserListRow(entity.RowsJson, entity.UserId) is { } json)
+                    {
+                        entity.RowsJson = json;
+                        entity.DateModified = now;
+                    }
+                }
+
+                foreach (var entity in await context.HomeRowDefaults.ToListAsync(ct).ConfigureAwait(false))
+                {
+                    if (WithUserListRow(entity.RowsJson, "admin default") is { } json)
+                    {
+                        entity.RowsJson = json;
+                        entity.DateModified = now;
+                    }
+                }
+
+                context.Markers.Add(new CustomMarker { Id = UserListRowMarker, DateApplied = now });
+                await context.SaveChangesAsync(ct).ConfigureAwait(false);
+                await transaction.CommitAsync(ct).ConfigureAwait(false);
+                return true;
+            }
+        }
+    }
+
     /// <summary>
     /// Gets the id of the row of an expanded row with sub-row key <paramref name="key"/>, as the 16 bytes of a GUID
     /// (<see cref="Guid.ToByteArray()"/> order): bytes 0 to 3 are the first 4 bytes of the MD5 of the 16 bytes of
@@ -452,6 +499,52 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
         var schema = await provider.GetSchemaAsync(context, ct).ConfigureAwait(false);
         var config = HomeRowConfigValidator.Validate(schema, row.Config).Config;
         return await provider.GetResolvableSubRowKeysAsync(context, config, ct).ConfigureAwait(false);
+    }
+
+    // A layout that isn't stored, with the Saved row after its first Movie discovery row (else at the end), unless it
+    // already has one or is full.
+    private static IReadOnlyList<HomeRowInstance> WithDefaultUserListRow(IReadOnlyList<HomeRowInstance> rows)
+    {
+        if (rows.Count >= UpstreamHomeSectionMapper.MaxRows || rows.Any(IsUserListRow))
+        {
+            return rows;
+        }
+
+        var list = rows.ToList();
+        InsertAfterDiscovery(list, new HomeRowInstance(_defaultUserListRowId, HomeRowProviderIds.UserList, null, new JsonObject(), true));
+        return list;
+    }
+
+    private static bool IsUserListRow(HomeRowInstance row)
+        => string.Equals(row.Provider, HomeRowProviderIds.UserList, StringComparison.Ordinal);
+
+    private static void InsertAfterDiscovery(List<HomeRowInstance> rows, HomeRowInstance row)
+    {
+        var discovery = rows.FindIndex(r => string.Equals(r.Provider, HomeRowProviderIds.MovieDiscovery, StringComparison.Ordinal));
+        rows.Insert(discovery < 0 ? rows.Count : discovery + 1, row);
+    }
+
+    // The layout with a user-list row after its first Movie discovery row (else at the end), or null to leave it as it
+    // is: it doesn't parse, already has one, or is full (logged, since that user won't see Saved until they make room).
+    private string? WithUserListRow(string json, object owner)
+    {
+        if (TryDeserialize(json, owner) is not { } rows || rows.Any(IsUserListRow))
+        {
+            return null;
+        }
+
+        if (rows.Count >= UpstreamHomeSectionMapper.MaxRows)
+        {
+            _logger.LogWarning("Not adding the Saved row to the home row layout of {Owner}: it already has {Count} rows, the most a layout can hold", owner, rows.Count);
+            return null;
+        }
+
+        var expandingIds = rows
+            .Where(r => _providerFactory.Get(r.Provider) is IExpandingHomeRowProvider
+                || string.Equals(r.Provider, HomeRowProviderIds.MovieDiscovery, StringComparison.Ordinal))
+            .Select(r => r.Id);
+        InsertAfterDiscovery(rows, new HomeRowInstance(NewRowId(expandingIds, Guid.NewGuid), HomeRowProviderIds.UserList, null, new JsonObject(), true));
+        return Serialize(rows);
     }
 
     private bool IsExpanding(EffectiveHomeRow row)
