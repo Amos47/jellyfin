@@ -176,7 +176,7 @@ public sealed class DiscoveryStableRowsTests : IClassFixture<JellyfinApplication
         {
             await SaveLayoutAsync(admin);
             var provider = (IExpandingHomeRowProvider)_factory.Services.GetRequiredService<IHomeRowProviderFactory>().Get(HomeRowProviderIds.MovieDiscovery)!;
-            var config = new JsonObject { ["maxRows"] = MaxRows };
+            var config = new JsonObject { ["maxRows"] = MaxRows, ["requireTrailer"] = false };
             var now = DateTime.UtcNow;
             var rowIds = await GetDiscoveryRowIdsAsync(client);
             var before = await SnapshotAsync(client, rowIds);
@@ -271,7 +271,7 @@ public sealed class DiscoveryStableRowsTests : IClassFixture<JellyfinApplication
     {
         var errors = await Layouts.SaveUserLayoutAsync(
             user,
-            [new HomeRowInstance(Guid.NewGuid(), HomeRowProviderIds.MovieDiscovery, null, new JsonObject { ["maxRows"] = MaxRows }, true)],
+            [new HomeRowInstance(Guid.NewGuid(), HomeRowProviderIds.MovieDiscovery, null, new JsonObject { ["maxRows"] = MaxRows, ["requireTrailer"] = false }, true)],
             Ct);
         Assert.Empty(errors);
     }

@@ -45,6 +45,13 @@ public interface IHomeRowConfigurationService
     Task<IReadOnlyList<HomeRowInstance>?> GetAdminDefaultAsync(CancellationToken ct);
 
     /// <summary>
+    /// Gets every user's own stored layout. Users who inherit, and records that do not parse, are left out.
+    /// </summary>
+    /// <param name="ct">The cancellation token.</param>
+    /// <returns>The layouts, each its rows in display order.</returns>
+    Task<IReadOnlyList<IReadOnlyList<HomeRowInstance>>> GetUserLayoutsAsync(CancellationToken ct);
+
+    /// <summary>
     /// Validates and saves the admin default layout.
     /// </summary>
     /// <param name="admin">The admin saving the default, whose schema context is used.</param>

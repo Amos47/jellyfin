@@ -13,7 +13,7 @@ using Microsoft.EntityFrameworkCore;
 namespace Emby.Server.Implementations.Discovery;
 
 /// <summary>
-/// Fork: keeps discovery lists, the shown log and the re-pick salts in <see cref="CustomDbContext"/>.
+/// Fork: keeps discovery lists, the shown log, the re-pick salts and the saved day picks in <see cref="CustomDbContext"/>.
 /// </summary>
 public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
 {
@@ -217,6 +217,12 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
 
                 await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
+                // The day is picked afresh: every user's saved picks of it go.
+                await context.DiscoveryPickSnapshots
+                    .Where(s => s.Day == day)
+                    .ExecuteDeleteAsync(cancellationToken)
+                    .ConfigureAwait(false);
+
                 // Only the picks of today and later read a salt; a week of slack covers clock and time zone changes.
                 var cutoff = DateOnly.FromDateTime(DateTime.Now).AddDays(-7);
                 await context.DiscoveryPickSalts
@@ -230,6 +236,113 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
             _writeLock.Release();
         }
     }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>?> GetPickSnapshotAsync(Guid userId, DateOnly day, CancellationToken cancellationToken)
+    {
+        var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+        await using (context.ConfigureAwait(false))
+        {
+            var json = await context.DiscoveryPickSnapshots
+                .AsNoTracking()
+                .Where(s => s.UserId.Equals(userId) && s.Day == day)
+                .Select(s => s.ListIdsJson)
+                .FirstOrDefaultAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return json is null ? null : ToListIds(json);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> AddPickSnapshotAsync(Guid userId, DateOnly day, string? salt, IReadOnlyList<string> listIds, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(listIds);
+
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                // Under the write lock, so a re-pick (which also takes it) is either fully before or fully after.
+                var currentSalt = await context.DiscoveryPickSalts
+                    .AsNoTracking()
+                    .Where(s => s.Day == day)
+                    .Select(s => s.Salt)
+                    .FirstOrDefaultAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                if (!string.Equals(currentSalt ?? string.Empty, salt ?? string.Empty, StringComparison.Ordinal))
+                {
+                    return listIds;
+                }
+
+                var existing = await context.DiscoveryPickSnapshots
+                    .AsNoTracking()
+                    .Where(s => s.UserId.Equals(userId) && s.Day == day)
+                    .Select(s => s.ListIdsJson)
+                    .FirstOrDefaultAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                if (existing is not null)
+                {
+                    return ToListIds(existing);
+                }
+
+                context.DiscoveryPickSnapshots.Add(new CustomDiscoveryPickSnapshot
+                {
+                    UserId = userId,
+                    Day = day,
+                    ListIdsJson = JsonSerializer.Serialize(listIds, JsonDefaults.Options)
+                });
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+
+                // As with the salts: only today and later are read, and a week of slack covers clock changes.
+                var cutoff = DateOnly.FromDateTime(DateTime.Now).AddDays(-7);
+                await context.DiscoveryPickSnapshots
+                    .Where(s => s.Day < cutoff && s.Day != day)
+                    .ExecuteDeleteAsync(cancellationToken)
+                    .ConfigureAwait(false);
+                return listIds;
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<bool> RemovePickSnapshotAsync(Guid userId, DateOnly day, IReadOnlyList<string> listIds, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(listIds);
+
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                // Under the write lock, so picks saved by another read meanwhile are seen and kept.
+                var entity = await context.DiscoveryPickSnapshots
+                    .FirstOrDefaultAsync(s => s.UserId.Equals(userId) && s.Day == day, cancellationToken)
+                    .ConfigureAwait(false);
+                if (entity is null || !ToListIds(entity.ListIdsJson).SequenceEqual(listIds, StringComparer.Ordinal))
+                {
+                    return false;
+                }
+
+                context.DiscoveryPickSnapshots.Remove(entity);
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    private static string[] ToListIds(string json)
+        => JsonSerializer.Deserialize<string[]>(json, JsonDefaults.Options) ?? [];
 
     private static DiscoveryList ToList(CustomDiscoveryList entity)
     {

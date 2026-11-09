@@ -179,6 +179,23 @@ public sealed class HomeRowConfigurationServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task UserLayouts_EveryUsersOwnStoredLayout_NotTheDefault()
+    {
+        var service = CreateService();
+        Assert.Empty(await service.GetUserLayoutsAsync(Ct));
+
+        Assert.Empty(await service.SaveAdminDefaultAsync(_admin, [Row(HomeRowProviderIds.NextUp)], Ct));
+        Assert.Empty(await service.SaveUserLayoutAsync(_user, [Row(HomeRowProviderIds.Resume)], Ct));
+        Assert.Empty(await service.SaveUserLayoutAsync(_other, [Row(HomeRowProviderIds.Resume), Row(HomeRowProviderIds.NextUp)], Ct));
+
+        var layouts = await service.GetUserLayoutsAsync(Ct);
+
+        Assert.Equal(
+            new[] { HomeRowProviderIds.Resume, HomeRowProviderIds.Resume + "," + HomeRowProviderIds.NextUp }.Order(StringComparer.Ordinal),
+            layouts.Select(l => string.Join(',', l.Select(r => r.Provider))).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public async Task Effective_InheritingUser_FollowsAdminDefaultChange()
     {
         var service = CreateService();

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,5 +36,23 @@ public sealed class MovieDiscoverySettings : IDiscoveryUserSettings
             && row.IsAvailable
             && string.Equals(row.Row.Provider, HomeRowProviderIds.MovieDiscovery, StringComparison.Ordinal)
             && MovieDiscoveryProvider.GetExternalTrailers(row.Row.Config));
+    }
+
+    /// <inheritdoc />
+    public async Task<int> GetReadyThresholdAsync(CancellationToken cancellationToken)
+    {
+        var layouts = new List<IReadOnlyList<HomeRowInstance>>();
+        if (await _configuration.GetAdminDefaultAsync(cancellationToken).ConfigureAwait(false) is { } adminDefault)
+        {
+            layouts.Add(adminDefault);
+        }
+
+        layouts.AddRange(await _configuration.GetUserLayoutsAsync(cancellationToken).ConfigureAwait(false));
+        return layouts
+            .SelectMany(rows => rows)
+            .Where(row => row.Enabled && string.Equals(row.Provider, HomeRowProviderIds.MovieDiscovery, StringComparison.Ordinal))
+            .Select(row => MovieDiscoveryProvider.GetPickRules(row.Config).MinReadyFilms)
+            .DefaultIfEmpty(DiscoveryPickRules.DefaultMinReadyFilms)
+            .Max();
     }
 }

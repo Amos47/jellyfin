@@ -539,7 +539,7 @@ public sealed class DiscoveryContractTests : IClassFixture<JellyfinApplicationFa
             var later = await RateAndTrailerAsync(admin, contract, 990203, "PG");
             var errors = await layouts.SaveUserLayoutAsync(
                 kid,
-                [new HomeRowInstance(Guid.NewGuid(), HomeRowProviderIds.MovieDiscovery, null, new JsonObject { ["maxRows"] = 10 }, true)],
+                [new HomeRowInstance(Guid.NewGuid(), HomeRowProviderIds.MovieDiscovery, null, new JsonObject { ["maxRows"] = 10, ["requireTrailer"] = false }, true)],
                 Ct);
             Assert.Empty(errors);
             var aboveId = Sync.FindFilm(990202)!.Id;

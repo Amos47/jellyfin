@@ -177,6 +177,23 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<IReadOnlyList<HomeRowInstance>>> GetUserLayoutsAsync(CancellationToken ct)
+    {
+        var context = await _dbFactory.CreateDbContextAsync(ct).ConfigureAwait(false);
+        await using (context.ConfigureAwait(false))
+        {
+            var stored = await context.HomeRowConfigurations.AsNoTracking()
+                .Select(c => new { c.UserId, c.RowsJson })
+                .ToListAsync(ct)
+                .ConfigureAwait(false);
+            return stored
+                .Select(c => TryDeserialize(c.RowsJson, c.UserId))
+                .OfType<List<HomeRowInstance>>()
+                .ToList<IReadOnlyList<HomeRowInstance>>();
+        }
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<HomeRowSaveError>> SaveAdminDefaultAsync(User admin, IReadOnlyList<HomeRowInstance> rows, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(admin);

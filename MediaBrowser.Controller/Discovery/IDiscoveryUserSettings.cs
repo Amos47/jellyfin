@@ -18,4 +18,13 @@ public interface IDiscoveryUserSettings
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>Whether the user sees external trailers on discovery films.</returns>
     Task<bool> GetExternalTrailersAsync(User user, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gets the readiness bar the discovery lists are reported against: the largest <c>minReadyFilms</c> among the
+    /// enabled Movie discovery rows of the stored layouts (the admin default and every user's own layout), or
+    /// <see cref="DiscoveryPickRules.DefaultMinReadyFilms"/> when there is no such row.
+    /// </summary>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The fewest playable films a list needs to be reported ready.</returns>
+    Task<int> GetReadyThresholdAsync(CancellationToken cancellationToken);
 }

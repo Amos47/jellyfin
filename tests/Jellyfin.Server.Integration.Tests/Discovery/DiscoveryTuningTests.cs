@@ -328,6 +328,8 @@ public sealed class DiscoveryTuningTests : IClassFixture<JellyfinApplicationFact
 
     private async Task SaveLayoutAsync(User user, JsonObject config, Guid? rowId = null)
     {
+        // These tests are about picking and trailers, not readiness: every visible film and list counts.
+        config["requireTrailer"] ??= false;
         var errors = await Layouts.SaveUserLayoutAsync(
             user,
             [new HomeRowInstance(rowId ?? Guid.NewGuid(), HomeRowProviderIds.MovieDiscovery, null, config, true)],
