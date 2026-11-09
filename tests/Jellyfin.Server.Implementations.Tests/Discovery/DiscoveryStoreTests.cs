@@ -148,6 +148,23 @@ public sealed class DiscoveryStoreTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task PickSnapshot_Remove_OnlyWhenStillTheSamePicks()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var user = Guid.NewGuid();
+        await _store.AddPickSnapshotAsync(user, today, null, ["a", "b"], ct);
+
+        // Picks saved since by another read are not removed.
+        Assert.False(await _store.RemovePickSnapshotAsync(user, today, ["a"], ct));
+        Assert.Equal(new[] { "a", "b" }, await _store.GetPickSnapshotAsync(user, today, ct));
+
+        Assert.True(await _store.RemovePickSnapshotAsync(user, today, ["a", "b"], ct));
+        Assert.Null(await _store.GetPickSnapshotAsync(user, today, ct));
+        Assert.False(await _store.RemovePickSnapshotAsync(user, today, ["a", "b"], ct));
+    }
+
+    [Fact]
     public async Task PickSnapshot_OldDaysPruned()
     {
         var ct = TestContext.Current.CancellationToken;

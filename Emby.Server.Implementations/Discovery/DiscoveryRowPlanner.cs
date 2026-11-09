@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -15,10 +16,18 @@ namespace Emby.Server.Implementations.Discovery;
 /// </summary>
 public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
 {
+    /// <summary>
+    /// How long a worked-out readiness (an unsaved pick) is reused before it is counted again.
+    /// </summary>
+    public static readonly TimeSpan ReadinessLifetime = TimeSpan.FromSeconds(60);
+
     private static readonly ExtraType[] _trailerTypes = [ExtraType.Trailer];
 
     private readonly IDiscoveryStore _store;
     private readonly IDiscoveryFilmSync _sync;
+    private readonly TimeProvider _time;
+    private readonly ConcurrentDictionary<ReadinessKey, ReadinessEntry> _readiness = new();
+    private long _generation;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DiscoveryRowPlanner"/> class.
@@ -26,9 +35,21 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
     /// <param name="store">The discovery store.</param>
     /// <param name="sync">The discovery film sync.</param>
     public DiscoveryRowPlanner(IDiscoveryStore store, IDiscoveryFilmSync sync)
+        : this(store, sync, TimeProvider.System)
+    {
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="DiscoveryRowPlanner"/> class.
+    /// </summary>
+    /// <param name="store">The discovery store.</param>
+    /// <param name="sync">The discovery film sync.</param>
+    /// <param name="time">The clock the readiness cache runs on.</param>
+    public DiscoveryRowPlanner(IDiscoveryStore store, IDiscoveryFilmSync sync, TimeProvider time)
     {
         _store = store;
         _sync = sync;
+        _time = time;
     }
 
     /// <inheritdoc />
@@ -47,20 +68,38 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
         {
             // Today's behaviour: any list with a film the user may see, picked afresh on every read.
             var visible = lists.Where(l => l.Films.Any(f => Resolve(user, f) is not null));
-            var salt = await _store.GetPickSaltAsync(day, cancellationToken).ConfigureAwait(false);
-            return DiscoveryPicker.Pick(user.Id, day, visible, maxRows, salt);
+            var visibleSalt = await _store.GetPickSaltAsync(day, cancellationToken).ConfigureAwait(false);
+            return DiscoveryPicker.Pick(user.Id, day, visible, maxRows, visibleSalt);
         }
 
-        var listIds = await _store.GetPickSnapshotAsync(user.Id, day, cancellationToken).ConfigureAwait(false)
-            ?? await PickReadyAsync(user, lists, rules.MinReadyFilms, day, cancellationToken).ConfigureAwait(false);
-
-        // The saved picks hold for the day; a list deleted since is left out.
         var byId = lists.ToDictionary(l => l.Id, StringComparer.Ordinal);
-        return listIds
-            .Select(id => byId.GetValueOrDefault(id))
-            .OfType<DiscoveryList>()
-            .Take(maxRows)
-            .ToList();
+        var saved = await _store.GetPickSnapshotAsync(user.Id, day, cancellationToken).ConfigureAwait(false);
+        if (saved is not null)
+        {
+            // The saved picks hold for the day; a list deleted since is left out.
+            var kept = ToLists(saved, byId, maxRows);
+            if (kept.Count > 0)
+            {
+                return kept;
+            }
+
+            // Every saved list was deleted: the snapshot is dead, so the day is picked again.
+            await _store.RemovePickSnapshotAsync(user.Id, day, saved, cancellationToken).ConfigureAwait(false);
+        }
+
+        // The salt is read before readiness is worked out, so a re-pick that lands meanwhile makes the save a no-op.
+        var salt = await _store.GetPickSaltAsync(day, cancellationToken).ConfigureAwait(false);
+        var picked = GetReadyPick(user, lists, rules.MinReadyFilms, day, salt, cancellationToken);
+
+        // Only a pick that fills maxRows is saved (in full, so any maxRows reads a prefix of it). A smaller one, empty
+        // included, is worked out again on later reads (through the readiness cache), so lists that become ready
+        // later that day still join it until it is full.
+        if (picked.Count >= maxRows)
+        {
+            picked = await _store.AddPickSnapshotAsync(user.Id, day, salt, picked, cancellationToken).ConfigureAwait(false);
+        }
+
+        return ToLists(picked, byId, maxRows);
     }
 
     /// <inheritdoc />
@@ -95,29 +134,79 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
         return CountReadyFilms(user, list, int.MaxValue);
     }
 
-    private async Task<IReadOnlyList<string>> PickReadyAsync(User user, IReadOnlyList<DiscoveryList> lists, int minReadyFilms, DateOnly day, CancellationToken cancellationToken)
+    /// <inheritdoc />
+    public bool IsPlayable(User user, DiscoveryFilmRef film)
     {
-        // The salt is read before readiness is worked out, so a re-pick that lands meanwhile makes the save a no-op.
-        var salt = await _store.GetPickSaltAsync(day, cancellationToken).ConfigureAwait(false);
+        ArgumentNullException.ThrowIfNull(user);
+        ArgumentNullException.ThrowIfNull(film);
+
+        return ResolvePlayable(user, film) is not null;
+    }
+
+    /// <inheritdoc />
+    public void InvalidateReadiness()
+    {
+        // The generation goes first, so a count that started before this is not stored after the clear.
+        Interlocked.Increment(ref _generation);
+        _readiness.Clear();
+    }
+
+    private static List<DiscoveryList> ToLists(IReadOnlyList<string> listIds, Dictionary<string, DiscoveryList> byId, int maxRows)
+        => listIds
+            .Select(id => byId.GetValueOrDefault(id))
+            .OfType<DiscoveryList>()
+            .Take(maxRows)
+            .ToList();
+
+    private IReadOnlyList<string> GetReadyPick(User user, IReadOnlyList<DiscoveryList> lists, int minReadyFilms, DateOnly day, string? salt, CancellationToken cancellationToken)
+    {
+        var key = new ReadinessKey(user.Id, day, salt ?? string.Empty, minReadyFilms);
+        var now = _time.GetUtcNow();
+        if (_readiness.TryGetValue(key, out var cached) && cached.Expires > now)
+        {
+            return cached.ListIds;
+        }
+
+        var generation = Interlocked.Read(ref _generation);
+        var picked = PickReady(user, lists, minReadyFilms, day, salt, cancellationToken);
+        if (Interlocked.Read(ref _generation) == generation)
+        {
+            _readiness[key] = new ReadinessEntry(picked, now + ReadinessLifetime);
+            foreach (var expired in _readiness.Where(e => e.Value.Expires <= now).ToList())
+            {
+                _readiness.TryRemove(expired);
+            }
+        }
+
+        return picked;
+    }
+
+    // The full ordered pick among the ready lists; each film is checked at most once.
+    private List<string> PickReady(User user, IReadOnlyList<DiscoveryList> lists, int minReadyFilms, DateOnly day, string? salt, CancellationToken cancellationToken)
+    {
+        var playable = new Dictionary<int, bool>();
         var ready = new List<DiscoveryList>();
         foreach (var list in lists)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (CountReadyFilms(user, list, minReadyFilms) >= minReadyFilms)
+            var count = 0;
+            foreach (var film in list.Films)
             {
-                ready.Add(list);
+                if (!playable.TryGetValue(film.TmdbId, out var isPlayable))
+                {
+                    isPlayable = ResolvePlayable(user, film) is not null;
+                    playable[film.TmdbId] = isPlayable;
+                }
+
+                if (isPlayable && ++count >= minReadyFilms)
+                {
+                    ready.Add(list);
+                    break;
+                }
             }
         }
 
-        // The full ordered pick is saved, so any maxRows reads a prefix of it.
-        var picked = DiscoveryPicker.Pick(user.Id, day, ready, ready.Count, salt).Select(l => l.Id).ToList();
-        if (picked.Count == 0)
-        {
-            // Nothing to keep stable: the first non-empty pick of the day is the one saved.
-            return picked;
-        }
-
-        return await _store.AddPickSnapshotAsync(user.Id, day, salt, picked, cancellationToken).ConfigureAwait(false);
+        return DiscoveryPicker.Pick(user.Id, day, ready, ready.Count, salt).Select(l => l.Id).ToList();
     }
 
     private int CountReadyFilms(User user, DiscoveryList list, int stopAt)
@@ -160,4 +249,8 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
         var virtualFilm = _sync.FindFilm(film.TmdbId);
         return virtualFilm is not null && virtualFilm.IsVisibleStandalone(user) ? virtualFilm : null;
     }
+
+    private readonly record struct ReadinessKey(Guid UserId, DateOnly Day, string Salt, int MinReadyFilms);
+
+    private sealed record ReadinessEntry(IReadOnlyList<string> ListIds, DateTimeOffset Expires);
 }

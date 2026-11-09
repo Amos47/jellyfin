@@ -310,6 +310,37 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
         }
     }
 
+    /// <inheritdoc />
+    public async Task<bool> RemovePickSnapshotAsync(Guid userId, DateOnly day, IReadOnlyList<string> listIds, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(listIds);
+
+        await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
+            await using (context.ConfigureAwait(false))
+            {
+                // Under the write lock, so picks saved by another read meanwhile are seen and kept.
+                var entity = await context.DiscoveryPickSnapshots
+                    .FirstOrDefaultAsync(s => s.UserId.Equals(userId) && s.Day == day, cancellationToken)
+                    .ConfigureAwait(false);
+                if (entity is null || !ToListIds(entity.ListIdsJson).SequenceEqual(listIds, StringComparer.Ordinal))
+                {
+                    return false;
+                }
+
+                context.DiscoveryPickSnapshots.Remove(entity);
+                await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
+                return true;
+            }
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
     private static string[] ToListIds(string json)
         => JsonSerializer.Deserialize<string[]>(json, JsonDefaults.Options) ?? [];
 

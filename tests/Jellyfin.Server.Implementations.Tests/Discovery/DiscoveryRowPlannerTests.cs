@@ -27,13 +27,14 @@ public sealed class DiscoveryRowPlannerTests : IDisposable
     private readonly User _user = new("tester", "Default", "Default");
     private readonly Dictionary<int, Movie> _films = [];
     private readonly Dictionary<int, BaseItem> _owned = [];
+    private readonly FakeTime _time = new();
     private readonly DiscoveryRowPlanner _planner;
 
     public DiscoveryRowPlannerTests()
     {
         _sync.Setup(s => s.FindFilm(It.IsAny<int>())).Returns<int>(id => _films.GetValueOrDefault(id));
         _sync.Setup(s => s.FindOwned(_user, It.IsAny<int>(), It.IsAny<string?>())).Returns<User, int, string?>((_, id, _) => _owned.GetValueOrDefault(id));
-        _planner = new DiscoveryRowPlanner(_store.Object, _sync.Object);
+        _planner = new DiscoveryRowPlanner(_store.Object, _sync.Object, _time);
 
         // GetExtras goes through the static library manager: a film in _withTrailer has one local trailer.
         var libraryManager = new Mock<ILibraryManager>();
@@ -49,6 +50,10 @@ public sealed class DiscoveryRowPlannerTests : IDisposable
         _store
             .Setup(s => s.AddPickSnapshotAsync(It.IsAny<Guid>(), It.IsAny<DateOnly>(), It.IsAny<string?>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
             .ReturnsAsync((Guid user, DateOnly day, string? _, IReadOnlyList<string> ids, CancellationToken _) => _snapshots.TryAdd((user, day), ids.ToArray()) ? ids : _snapshots[(user, day)]);
+        _store
+            .Setup(s => s.RemovePickSnapshotAsync(It.IsAny<Guid>(), It.IsAny<DateOnly>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .ReturnsAsync((Guid user, DateOnly day, IReadOnlyList<string> ids, CancellationToken _)
+                => _snapshots.TryGetValue((user, day), out var saved) && saved.SequenceEqual(ids) && _snapshots.Remove((user, day)));
     }
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
@@ -57,6 +62,10 @@ public sealed class DiscoveryRowPlannerTests : IDisposable
 
     private void SetLists(params DiscoveryList[] lists)
         => _store.Setup(s => s.GetListsAsync(It.IsAny<CancellationToken>())).ReturnsAsync(lists);
+
+    private int FindFilmCalls() => _sync.Invocations.Count(i => i.Method.Name == nameof(IDiscoveryFilmSync.FindFilm));
+
+    private void AddTrailer(int tmdbId) => _withTrailer.Add(_films[tmdbId].Id);
 
     private static DiscoveryList List(string id, params int[] tmdbIds)
         => new(id, "Title of " + id, "tests", tmdbIds.Select(t => new DiscoveryFilmRef(t, null)).ToArray());
@@ -254,7 +263,7 @@ public sealed class DiscoveryRowPlannerTests : IDisposable
 
         Assert.Empty(picked);
 
-        // Nothing is saved: the first non-empty pick of the day is the one kept.
+        // Nothing is saved: only a pick that fills maxRows is kept.
         Assert.Empty(_snapshots);
     }
 
@@ -286,5 +295,144 @@ public sealed class DiscoveryRowPlannerTests : IDisposable
         Assert.Equal(2, picked.Count);
         Assert.Empty(_snapshots);
         _store.Verify(s => s.GetPickSnapshotAsync(It.IsAny<Guid>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
+    public async Task Picks_PartialPickNotSaved_GrowsAsListsBecomeReady_ThenFreezesWhenFull()
+    {
+        Film(1, trailer: true);
+        Film(2);
+        Film(3);
+        Film(4);
+        var lists = new[] { List("a", 1), List("b", 2), List("c", 3), List("d", 4) };
+        SetLists(lists);
+        var rules = new DiscoveryPickRules(true, 1);
+
+        // One ready list where three are asked for: shown, not saved.
+        var one = await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct);
+        Assert.Equal(new[] { "a" }, one.Select(l => l.Id));
+        Assert.Empty(_snapshots);
+
+        // A second list becomes ready (a trailer is registered): the pick grows, still unsaved.
+        AddTrailer(2);
+        _planner.InvalidateReadiness();
+        var two = await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct);
+        Assert.Equal(DiscoveryPicker.Pick(_user.Id, _day, lists[..2], 10, null).Select(l => l.Id), two.Select(l => l.Id));
+        Assert.Empty(_snapshots);
+
+        // A third: the pick is full, so it is saved.
+        AddTrailer(3);
+        _planner.InvalidateReadiness();
+        var full = await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct);
+        var expected = DiscoveryPicker.Pick(_user.Id, _day, lists[..3], 10, null).Select(l => l.Id).ToArray();
+        Assert.Equal(expected, full.Select(l => l.Id));
+        Assert.Equal(expected, _snapshots[(_user.Id, _day)]);
+
+        // Frozen: a fourth list becoming ready no longer changes the day's picks.
+        AddTrailer(4);
+        _planner.InvalidateReadiness();
+        var later = await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct);
+        Assert.Equal(expected, later.Select(l => l.Id));
+    }
+
+    [Fact]
+    public async Task Picks_ReadinessCached_NoRecountWithinLifetime_InvalidatedByReshuffle()
+    {
+        Film(1, trailer: true);
+        Film(2);
+        var lists = new[] { List("a", 1), List("b", 2) };
+        SetLists(lists);
+        var rules = new DiscoveryPickRules(true, 1);
+
+        Assert.Equal(new[] { "a" }, (await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct)).Select(l => l.Id));
+        var counted = FindFilmCalls();
+
+        // Within the lifetime the readiness is not counted again, so a new trailer is not seen yet.
+        AddTrailer(2);
+        _time.Advance(TimeSpan.FromSeconds(59));
+        Assert.Equal(new[] { "a" }, (await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct)).Select(l => l.Id));
+        Assert.Equal(counted, FindFilmCalls());
+
+        // A reshuffle invalidates it: the next read counts again.
+        _planner.InvalidateReadiness();
+        var after = await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct);
+        Assert.Equal(DiscoveryPicker.Pick(_user.Id, _day, lists, 10, null).Select(l => l.Id), after.Select(l => l.Id));
+        Assert.True(FindFilmCalls() > counted);
+    }
+
+    [Fact]
+    public async Task Picks_ReadinessCache_ExpiresAfterSixtySeconds_AndIsPerSalt()
+    {
+        Film(1, trailer: true);
+        Film(2);
+        var lists = new[] { List("a", 1), List("b", 2) };
+        SetLists(lists);
+        var rules = new DiscoveryPickRules(true, 1);
+        Assert.Single(await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct));
+        AddTrailer(2);
+
+        // A new salt (a re-pick) is a different key.
+        _store.Setup(s => s.GetPickSaltAsync(_day, It.IsAny<CancellationToken>())).ReturnsAsync("salt-z");
+        Assert.Equal(2, (await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct)).Count);
+
+        // And an entry lapses after its lifetime.
+        _store.Setup(s => s.GetPickSaltAsync(_day, It.IsAny<CancellationToken>())).ReturnsAsync((string?)null);
+        Assert.Single(await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct));
+        _time.Advance(TimeSpan.FromSeconds(61));
+        Assert.Equal(2, (await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct)).Count);
+    }
+
+    [Fact]
+    public async Task Picks_SnapshotWithAllListsDeleted_Recomputes()
+    {
+        Film(1, trailer: true);
+        var lists = new[] { List("c", 1), List("d", 1) };
+        SetLists(lists);
+        _snapshots[(_user.Id, _day)] = ["gone-a", "gone-b"];
+
+        var picked = await _planner.GetPickedListsAsync(_user, 2, new DiscoveryPickRules(true, 1), _day, Ct);
+
+        var expected = DiscoveryPicker.Pick(_user.Id, _day, lists, 10, null).Select(l => l.Id).ToArray();
+        Assert.Equal(expected, picked.Select(l => l.Id));
+
+        // The dead snapshot is replaced by the new full pick.
+        Assert.Equal(expected, _snapshots[(_user.Id, _day)]);
+    }
+
+    [Fact]
+    public async Task Picks_SnapshotWithSomeListsDeleted_KeepsTheRest()
+    {
+        Film(1, trailer: true);
+        SetLists(List("c", 1), List("d", 1));
+        _snapshots[(_user.Id, _day)] = ["gone", "d"];
+
+        var picked = await _planner.GetPickedListsAsync(_user, 2, new DiscoveryPickRules(true, 1), _day, Ct);
+
+        Assert.Equal(new[] { "d" }, picked.Select(l => l.Id));
+        Assert.Equal(new[] { "gone", "d" }, _snapshots[(_user.Id, _day)]);
+    }
+
+    [Fact]
+    public void IsPlayable_OwnedOrVisibleWithTrailer()
+    {
+        Film(1, trailer: true);
+        Film(2);
+        Film(3, visible: false, trailer: true);
+        _owned[4] = new Movie { Id = Guid.NewGuid() };
+
+        Assert.True(_planner.IsPlayable(_user, new DiscoveryFilmRef(1, null)));
+        Assert.False(_planner.IsPlayable(_user, new DiscoveryFilmRef(2, null)));
+        Assert.False(_planner.IsPlayable(_user, new DiscoveryFilmRef(3, null)));
+        Assert.True(_planner.IsPlayable(_user, new DiscoveryFilmRef(4, null)));
+        Assert.False(_planner.IsPlayable(_user, new DiscoveryFilmRef(99, null)));
+    }
+
+    private sealed class FakeTime : TimeProvider
+    {
+        private DateTimeOffset _now = new(2026, 11, 7, 12, 0, 0, TimeSpan.Zero);
+
+        public override DateTimeOffset GetUtcNow() => _now;
+
+        public void Advance(TimeSpan by) => _now += by;
     }
 }

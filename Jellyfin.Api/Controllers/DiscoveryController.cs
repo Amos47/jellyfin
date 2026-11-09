@@ -41,6 +41,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
     private readonly IDiscoveryTrailers _trailers;
     private readonly IDiscoveryUserPicks _picks;
     private readonly IDiscoveryRowPlanner _planner;
+    private readonly IDiscoveryUserSettings _settings;
     private readonly IUserManager _userManager;
     private readonly ILogger<DiscoveryController> _logger;
 
@@ -52,6 +53,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
     /// <param name="trailers">Instance of the <see cref="IDiscoveryTrailers"/> interface.</param>
     /// <param name="picks">Instance of the <see cref="IDiscoveryUserPicks"/> interface.</param>
     /// <param name="planner">Instance of the <see cref="IDiscoveryRowPlanner"/> interface.</param>
+    /// <param name="settings">Instance of the <see cref="IDiscoveryUserSettings"/> interface.</param>
     /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
     /// <param name="logger">Instance of the <see cref="ILogger{DiscoveryController}"/> interface.</param>
     public DiscoveryController(
@@ -60,6 +62,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
         IDiscoveryTrailers trailers,
         IDiscoveryUserPicks picks,
         IDiscoveryRowPlanner planner,
+        IDiscoveryUserSettings settings,
         IUserManager userManager,
         ILogger<DiscoveryController> logger)
     {
@@ -68,6 +71,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
         _trailers = trailers;
         _picks = picks;
         _planner = planner;
+        _settings = settings;
         _userManager = userManager;
         _logger = logger;
     }
@@ -128,6 +132,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
         var day = request?.Date ?? DateOnly.FromDateTime(DateTime.Now);
         var salt = RandomNumberGenerator.GetHexString(32, lowercase: true);
         await _store.SetPickSaltAsync(day, salt, cancellationToken).ConfigureAwait(false);
+        _planner.InvalidateReadiness();
         return Ok(new DiscoveryReshuffleDto(day, salt));
     }
 
@@ -170,7 +175,9 @@ public partial class DiscoveryController : BaseJellyfinApiController
     /// <summary>
     /// Gets the discovery lists, each with how many of its films can be played now and whether that makes it ready.
     /// The films are counted for the calling admin (for an API key, the first administrator): discovery films with a
-    /// local trailer, plus films owned in the library.
+    /// local trailer, plus films owned in the library. A list is ready with at least the largest <c>minReadyFilms</c>
+    /// of the enabled Movie discovery rows in the stored layouts (the admin default and every user's own), or 5 when
+    /// there is no such row.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <response code="200">Lists returned.</response>
@@ -180,8 +187,37 @@ public partial class DiscoveryController : BaseJellyfinApiController
     public async Task<ActionResult<DiscoveryListDto[]>> GetLists(CancellationToken cancellationToken)
     {
         var lists = await _store.GetListsAsync(cancellationToken).ConfigureAwait(false);
+        var threshold = await _settings.GetReadyThresholdAsync(cancellationToken).ConfigureAwait(false);
         var viewer = GetViewer();
-        return Ok(lists.Select(l => ToDto(l, viewer is null ? 0 : _planner.CountReadyFilms(viewer, l))).ToArray());
+
+        // A film in several lists is checked once per request.
+        var playable = new Dictionary<int, bool>();
+        int CountReady(DiscoveryList list)
+        {
+            if (viewer is null)
+            {
+                return 0;
+            }
+
+            var count = 0;
+            foreach (var film in list.Films)
+            {
+                if (!playable.TryGetValue(film.TmdbId, out var isPlayable))
+                {
+                    isPlayable = _planner.IsPlayable(viewer, film);
+                    playable[film.TmdbId] = isPlayable;
+                }
+
+                if (isPlayable)
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        return Ok(lists.Select(l => ToDto(l, CountReady(l), threshold)).ToArray());
     }
 
     /// <summary>
@@ -244,6 +280,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
         }
 
         await _store.SetListAsync(new DiscoveryList(listId, list.Title, list.Source, films, group), cancellationToken).ConfigureAwait(false);
+        _planner.InvalidateReadiness();
 
         // Not the request's token: once the list is saved, the films follow it even if the client hangs up.
         await _filmSync.SyncAsync(CancellationToken.None).ConfigureAwait(false);
@@ -275,6 +312,8 @@ public partial class DiscoveryController : BaseJellyfinApiController
             return NotFound();
         }
 
+        _planner.InvalidateReadiness();
+
         // Not the request's token: once the list is removed, the films follow even if the client hangs up.
         await _filmSync.SyncAsync(CancellationToken.None).ConfigureAwait(false);
         return NoContent();
@@ -301,6 +340,11 @@ public partial class DiscoveryController : BaseJellyfinApiController
         CancellationToken cancellationToken)
     {
         var result = await _trailers.SetAsync(tmdbId, trailer.Path ?? string.Empty, cancellationToken).ConfigureAwait(false);
+        if (result == DiscoveryTrailerResult.Set)
+        {
+            _planner.InvalidateReadiness();
+        }
+
         return result switch
         {
             DiscoveryTrailerResult.Set => NoContent(),
@@ -323,12 +367,13 @@ public partial class DiscoveryController : BaseJellyfinApiController
     public async Task<ActionResult> DeleteTrailer([FromRoute, Required] int tmdbId, CancellationToken cancellationToken)
     {
         await _trailers.RemoveAsync(tmdbId, cancellationToken).ConfigureAwait(false);
+        _planner.InvalidateReadiness();
         return NoContent();
     }
 
     private static bool IsValidId(string id) => ListIdRegex().IsMatch(id);
 
-    private static DiscoveryListDto ToDto(DiscoveryList list, int readyFilms)
+    private static DiscoveryListDto ToDto(DiscoveryList list, int readyFilms, int threshold)
         => new(
             list.Id,
             list.Title,
@@ -336,7 +381,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
             list.Films.Select(f => new DiscoveryFilmDto(f.TmdbId, f.ImdbId)).ToArray(),
             list.Group,
             readyFilms,
-            readyFilms >= DiscoveryPickRules.DefaultMinReadyFilms);
+            readyFilms >= threshold);
 
     // The calling admin; an API key has no user, so the first administrator stands in.
     private User? GetViewer()

@@ -18,10 +18,13 @@ public interface IDiscoveryRowPlanner
     /// <list type="bullet">
     /// <item>With <see cref="DiscoveryPickRules.RequireTrailer"/> on, a list is eligible when it has at least
     /// <see cref="DiscoveryPickRules.MinReadyFilms"/> films playable for the user (see <see cref="CountReadyFilms"/>).
-    /// The user's first non-empty pick of the day is saved in full (<see cref="IDiscoveryStore.AddPickSnapshotAsync"/>)
-    /// and read back for the rest of the day, so lists becoming ready (or unready) later don't change it; a smaller
-    /// <paramref name="maxRows"/> takes a prefix, and saved lists that were deleted since are left out. A re-pick
-    /// clears the saved picks of its day.</item>
+    /// The user's first pick of the day that fills <paramref name="maxRows"/> is saved in full
+    /// (<see cref="IDiscoveryStore.AddPickSnapshotAsync"/>) and read back for the rest of the day, so lists becoming
+    /// ready (or unready) later don't change it; a smaller <paramref name="maxRows"/> takes a prefix, and saved lists
+    /// that were deleted since are left out. A saved pick whose lists were all deleted is dropped and picked again. A
+    /// smaller pick is not saved and is worked out again on later reads, through a readiness cache kept per user, day
+    /// and salt for <c>60</c> seconds (see <see cref="InvalidateReadiness"/>). A re-pick clears the saved picks of its
+    /// day.</item>
     /// <item>With it off, a list is eligible when it has at least one film the user may see (an owned library film
     /// counts as visible), and nothing is saved.</item>
     /// </list>
@@ -61,4 +64,18 @@ public interface IDiscoveryRowPlanner
     /// <param name="list">The list.</param>
     /// <returns>The number of playable films.</returns>
     int CountReadyFilms(User user, DiscoveryList list);
+
+    /// <summary>
+    /// Gets whether one film is playable for the user, as <see cref="CountReadyFilms"/> counts it.
+    /// </summary>
+    /// <param name="user">The user.</param>
+    /// <param name="film">The film.</param>
+    /// <returns>Whether the film is playable.</returns>
+    bool IsPlayable(User user, DiscoveryFilmRef film);
+
+    /// <summary>
+    /// Drops the cached readiness of every user, so the next read counts again. Called on a re-pick and when a list
+    /// or a trailer changes.
+    /// </summary>
+    void InvalidateReadiness();
 }

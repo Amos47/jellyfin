@@ -70,7 +70,9 @@ public sealed class DiscoveryReadyPoolsTests : IClassFixture<JellyfinApplication
             await PutListAsync(client, "rp-sv-a", 3001);
             await PutListAsync(client, "rp-sv-b", 3002);
             await SetTrailerAsync(client, 3001);
-            await SaveLayoutAsync(user, new JsonObject { ["maxRows"] = 10, ["minReadyFilms"] = 1 });
+
+            // One row asked for and one ready: the pick is full, so it is saved.
+            await SaveLayoutAsync(user, new JsonObject { ["maxRows"] = 1, ["minReadyFilms"] = 1 });
             const string Url = "Discovery/Picks?date=2033-01-10";
 
             Assert.Equal(new[] { 3001 }, await GetPickedAsync(client, Url));
@@ -101,10 +103,12 @@ public sealed class DiscoveryReadyPoolsTests : IClassFixture<JellyfinApplication
             await PutListAsync(client, "rp-rs-a", 3011);
             await PutListAsync(client, "rp-rs-b", 3012);
             await SetTrailerAsync(client, 3011);
-            await SaveLayoutAsync(user, new JsonObject { ["maxRows"] = 10, ["minReadyFilms"] = 1 });
+            await SaveLayoutAsync(user, new JsonObject { ["maxRows"] = 1, ["minReadyFilms"] = 1 });
             const string Url = "Discovery/Picks?date=2033-02-10";
             Assert.Equal(new[] { 3011 }, await GetPickedAsync(client, Url));
             await SetTrailerAsync(client, 3012);
+            await RemoveTrailerAsync(client, 3011);
+            Assert.Equal(new[] { 3011 }, await GetPickedAsync(client, Url));
 
             using (var response = await client.PostAsJsonAsync("Discovery/Picks/Reshuffle", new { Date = "2033-02-10" }, JsonDefaults.Options, Ct))
             {
@@ -112,7 +116,7 @@ public sealed class DiscoveryReadyPoolsTests : IClassFixture<JellyfinApplication
             }
 
             Assert.Null(await Store.GetPickSnapshotAsync(user.Id, new DateOnly(2033, 2, 10), Ct));
-            Assert.Equal(new[] { 3011, 3012 }, await GetPickedAsync(client, Url));
+            Assert.Equal(new[] { 3012 }, await GetPickedAsync(client, Url));
         }
         finally
         {
@@ -131,13 +135,14 @@ public sealed class DiscoveryReadyPoolsTests : IClassFixture<JellyfinApplication
             await PutListAsync(client, "rp-nd-a", 3021);
             await PutListAsync(client, "rp-nd-b", 3022);
             await SetTrailerAsync(client, 3021);
-            await SaveLayoutAsync(user, new JsonObject { ["maxRows"] = 10, ["minReadyFilms"] = 1 });
+            await SaveLayoutAsync(user, new JsonObject { ["maxRows"] = 1, ["minReadyFilms"] = 1 });
             Assert.Equal(new[] { 3021 }, await GetPickedAsync(client, "Discovery/Picks?date=2033-03-10"));
 
             await SetTrailerAsync(client, 3022);
+            await RemoveTrailerAsync(client, 3021);
 
             Assert.Equal(new[] { 3021 }, await GetPickedAsync(client, "Discovery/Picks?date=2033-03-10"));
-            Assert.Equal(new[] { 3021, 3022 }, await GetPickedAsync(client, "Discovery/Picks?date=2033-03-11"));
+            Assert.Equal(new[] { 3022 }, await GetPickedAsync(client, "Discovery/Picks?date=2033-03-11"));
         }
         finally
         {
@@ -157,9 +162,10 @@ public sealed class DiscoveryReadyPoolsTests : IClassFixture<JellyfinApplication
             await PutListAsync(client, "rp-dl-b", 3032);
             await SetTrailerAsync(client, 3031);
             await SetTrailerAsync(client, 3032);
-            await SaveLayoutAsync(user, new JsonObject { ["maxRows"] = 10, ["minReadyFilms"] = 1 });
+            await SaveLayoutAsync(user, new JsonObject { ["maxRows"] = 2, ["minReadyFilms"] = 1 });
             const string Url = "Discovery/Picks?date=2033-04-10";
             Assert.Equal(new[] { 3031, 3032 }, await GetPickedAsync(client, Url));
+            Assert.Equal(2, (await Store.GetPickSnapshotAsync(user.Id, new DateOnly(2033, 4, 10), Ct))!.Count);
 
             await DeleteListsAsync(client, "rp-dl-b");
 
@@ -187,7 +193,7 @@ public sealed class DiscoveryReadyPoolsTests : IClassFixture<JellyfinApplication
 
             Assert.Empty(await GetDiscoveryRowIdsAsync(client));
 
-            // Ready now: today's empty pick was not saved, so the list is picked on the next read.
+            // Ready now: a pick short of maxRows is not saved, so the list is picked on the next read.
             await SetTrailerAsync(client, 3044);
             var rowId = Assert.Single(await GetDiscoveryRowIdsAsync(client));
             var row = await GetAsync<HomeRowItemsDto>(client, $"HomeRows/{rowId:D}/Items");
@@ -262,6 +268,41 @@ public sealed class DiscoveryReadyPoolsTests : IClassFixture<JellyfinApplication
         {
             await DeleteListsAsync(client, "rp-ls-a", "rp-ls-b", "rp-ls-c");
             await SetOwnedTmdbAsync(null);
+        }
+    }
+
+    [Fact]
+    public async Task Lists_Ready_UsesLargestMinReadyFilms()
+    {
+        var client = await SetUpAsync();
+        var lenient = await CreateUserAsync("ready-threshold-3");
+        var strict = await CreateUserAsync("ready-threshold-4");
+        try
+        {
+            await PutListAsync(client, "rp-th-four", 3071, 3072, 3073, 3074);
+            await PutListAsync(client, "rp-th-three", 3071, 3072, 3073);
+            foreach (var tmdbId in new[] { 3071, 3072, 3073, 3074 })
+            {
+                await SetTrailerAsync(client, tmdbId);
+            }
+
+            // The only Movie discovery row needs three: both lists are ready.
+            await SaveLayoutAsync(lenient, new JsonObject { ["minReadyFilms"] = 3 });
+            var lists = await GetAsync<JsonArray>(client, "Discovery/Lists");
+            Assert.True((bool)Find(lists, "rp-th-four")["Ready"]!);
+            Assert.True((bool)Find(lists, "rp-th-three")["Ready"]!);
+
+            // Another user's row needs four: the largest is the bar.
+            await SaveLayoutAsync(strict, new JsonObject { ["minReadyFilms"] = 4 });
+            lists = await GetAsync<JsonArray>(client, "Discovery/Lists");
+            Assert.True((bool)Find(lists, "rp-th-four")["Ready"]!);
+            Assert.False((bool)Find(lists, "rp-th-three")["Ready"]!);
+            Assert.Equal(3, (int)Find(lists, "rp-th-three")["ReadyFilms"]!);
+        }
+        finally
+        {
+            await DeleteUsersAsync(lenient, strict);
+            await DeleteListsAsync(client, "rp-th-four", "rp-th-three");
         }
     }
 

@@ -97,4 +97,15 @@ public interface IDiscoveryStore
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The picks that hold: the saved ones if some were already saved, else <paramref name="listIds"/>.</returns>
     Task<IReadOnlyList<string>> AddPickSnapshotAsync(Guid userId, DateOnly day, string? salt, IReadOnlyList<string> listIds, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Removes a user's saved picks of a day, but only while they are still <paramref name="listIds"/>, so picks
+    /// another read saved meanwhile are kept.
+    /// </summary>
+    /// <param name="userId">The user id.</param>
+    /// <param name="day">The server's local date.</param>
+    /// <param name="listIds">The saved picks expected, in display order.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>True if the picks were removed.</returns>
+    Task<bool> RemovePickSnapshotAsync(Guid userId, DateOnly day, IReadOnlyList<string> listIds, CancellationToken cancellationToken);
 }
