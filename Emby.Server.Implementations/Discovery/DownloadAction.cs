@@ -123,6 +123,13 @@ public sealed class DownloadAction : IItemActionProvider
                     return null;
                 }
 
+                // Requested, downloading: nothing to do, the button is disabled. Answer with the current state.
+                var existing = await _requests.GetAsync(tmdbId, cancellationToken).ConfigureAwait(false);
+                if (Create(existing?.State).Enabled != true)
+                {
+                    return existing;
+                }
+
                 var requested = await _requests.RequestAsync(tmdbId, user.Id, cancellationToken).ConfigureAwait(false);
                 var saved = await _lists.GetDefaultListAsync(user.Id, cancellationToken).ConfigureAwait(false);
                 var imdbId = film.GetProviderId(MetadataProvider.Imdb);

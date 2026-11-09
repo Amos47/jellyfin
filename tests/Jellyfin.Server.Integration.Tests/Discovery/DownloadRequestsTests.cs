@@ -147,6 +147,38 @@ public sealed class DownloadRequestsTests : IClassFixture<JellyfinApplicationFac
     }
 
     [Fact]
+    public async Task Download_PostOnDisabledAction_ChangesNothing()
+    {
+        var client = await SetUpAsync();
+        var (userA, clientA) = await CreateNonAdminAsync();
+        var (userB, clientB) = await CreateNonAdminAsync();
+        try
+        {
+            await SetDownloadsAsync(client, true);
+            await PutListAsync(client, "dl-disabled", 5012);
+            var filmId = Sync.FindFilm(5012)!.Id;
+
+            await PostAsync<JsonObject>(clientA, $"Items/{filmId:N}/Actions/download");
+
+            // B posts straight to the endpoint: the current state comes back and nothing is recorded for B.
+            var response = await PostAsync<JsonObject>(clientB, $"Items/{filmId:N}/Actions/download");
+            Assert.Equal("requested", (string?)response["State"]);
+            Assert.Empty(FilmTmdbIds(await GetSavedAsync(clientB)));
+
+            var request = await GetRequestAsync(client, "requested", 5012);
+            Assert.NotNull(request);
+            Assert.Equal(new[] { userA.Id }, RequestUserIds(request));
+        }
+        finally
+        {
+            await SetDownloadsAsync(client, false);
+            await UserManager.DeleteUserAsync(userA.Id);
+            await UserManager.DeleteUserAsync(userB.Id);
+            await DeleteListsAsync(client, "dl-disabled");
+        }
+    }
+
+    [Fact]
     public async Task Download_StatesFlow_AvailableRequestedDownloadingDone()
     {
         var client = await SetUpAsync();
