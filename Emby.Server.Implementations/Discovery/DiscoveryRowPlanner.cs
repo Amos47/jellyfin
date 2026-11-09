@@ -12,7 +12,9 @@ using MediaBrowser.Model.Entities;
 namespace Emby.Server.Implementations.Discovery;
 
 /// <summary>
-/// Fork: decides which discovery lists a user sees on a day and which films each shows.
+/// Fork: decides which discovery lists a user sees on a day and which titles each shows. Movie discovery picks among
+/// the Movie lists and Show discovery among the Series lists; each type has its own saved picks and readiness, and a
+/// title only ever resolves to a film or show of its own type.
 /// </summary>
 public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
 {
@@ -53,7 +55,11 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<DiscoveryList>> GetPickedListsAsync(User user, int maxRows, DiscoveryPickRules rules, DateOnly day, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<DiscoveryList>> GetPickedListsAsync(User user, int maxRows, DiscoveryPickRules rules, DateOnly day, CancellationToken cancellationToken)
+        => GetPickedListsAsync(user, maxRows, rules, day, DiscoveryMediaType.Movie, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<DiscoveryList>> GetPickedListsAsync(User user, int maxRows, DiscoveryPickRules rules, DateOnly day, DiscoveryMediaType type, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(rules);
@@ -63,7 +69,10 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
             return [];
         }
 
-        var lists = await _store.GetListsAsync(cancellationToken).ConfigureAwait(false);
+        // The lists of the row's type only: Movie discovery picks films, Show discovery shows.
+        var lists = (await _store.GetListsAsync(cancellationToken).ConfigureAwait(false))
+            .Where(l => l.ItemType == type)
+            .ToList();
         if (!rules.RequireTrailer)
         {
             // Today's behaviour: any list with a film the user may see, picked afresh on every read.
@@ -73,7 +82,7 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
         }
 
         var byId = lists.ToDictionary(l => l.Id, StringComparer.Ordinal);
-        var saved = await _store.GetPickSnapshotAsync(user.Id, day, cancellationToken).ConfigureAwait(false);
+        var saved = await GetSnapshotAsync(user.Id, day, type, cancellationToken).ConfigureAwait(false);
         if (saved is not null)
         {
             // The saved picks hold for the day; a list deleted since is left out.
@@ -84,12 +93,12 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
             }
 
             // Every saved list was deleted: the snapshot is dead, so the day is picked again.
-            await _store.RemovePickSnapshotAsync(user.Id, day, saved, cancellationToken).ConfigureAwait(false);
+            await RemoveSnapshotAsync(user.Id, day, type, saved, cancellationToken).ConfigureAwait(false);
         }
 
         // The salt is read before readiness is worked out, so a re-pick that lands meanwhile makes the save a no-op.
         var salt = await _store.GetPickSaltAsync(day, cancellationToken).ConfigureAwait(false);
-        var picked = GetReadyPick(user, lists, rules.MinReadyFilms, day, salt, cancellationToken);
+        var picked = GetReadyPick(user, lists, rules.MinReadyFilms, day, type, salt, cancellationToken);
 
         // Only a full pick is saved (in full, so any maxRows reads a prefix of it): one that fills maxRows, or every
         // row the stored lists can ever give when that is fewer (one per group, one per ungrouped list). A smaller
@@ -98,7 +107,7 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
         var full = Math.Min(maxRows, GetCapacity(lists));
         if (full > 0 && picked.Count >= full)
         {
-            picked = await _store.AddPickSnapshotAsync(user.Id, day, salt, picked, cancellationToken).ConfigureAwait(false);
+            picked = await AddSnapshotAsync(user.Id, day, type, salt, picked, cancellationToken).ConfigureAwait(false);
         }
 
         return ToLists(picked, byId, maxRows);
@@ -166,9 +175,9 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
         => lists.Count(l => string.IsNullOrWhiteSpace(l.Group))
             + lists.Where(l => !string.IsNullOrWhiteSpace(l.Group)).Select(l => l.Group).Distinct(StringComparer.Ordinal).Count();
 
-    private IReadOnlyList<string> GetReadyPick(User user, IReadOnlyList<DiscoveryList> lists, int minReadyFilms, DateOnly day, string? salt, CancellationToken cancellationToken)
+    private IReadOnlyList<string> GetReadyPick(User user, IReadOnlyList<DiscoveryList> lists, int minReadyFilms, DateOnly day, DiscoveryMediaType type, string? salt, CancellationToken cancellationToken)
     {
-        var key = new ReadinessKey(user.Id, day, salt ?? string.Empty, minReadyFilms);
+        var key = new ReadinessKey(user.Id, day, type, salt ?? string.Empty, minReadyFilms);
         var now = _time.GetUtcNow();
         // An entry from before the last invalidation is ignored, even one written after it by a count that started
         // before it, so there is no gap between checking the generation and writing the entry.
@@ -191,7 +200,7 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
     // The full ordered pick among the ready lists; each film is checked at most once.
     private List<string> PickReady(User user, IReadOnlyList<DiscoveryList> lists, int minReadyFilms, DateOnly day, string? salt, CancellationToken cancellationToken)
     {
-        var playable = new Dictionary<int, bool>();
+        var playable = new Dictionary<(int TmdbId, DiscoveryMediaType Type), bool>();
         var ready = new List<DiscoveryList>();
         foreach (var list in lists)
         {
@@ -199,10 +208,10 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
             var count = 0;
             foreach (var film in list.Films)
             {
-                if (!playable.TryGetValue(film.TmdbId, out var isPlayable))
+                if (!playable.TryGetValue((film.TmdbId, film.Type), out var isPlayable))
                 {
                     isPlayable = ResolvePlayable(user, film) is not null;
-                    playable[film.TmdbId] = isPlayable;
+                    playable[(film.TmdbId, film.Type)] = isPlayable;
                 }
 
                 if (isPlayable && ++count >= minReadyFilms)
@@ -232,32 +241,49 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
 
     private BaseItem? ResolvePlayable(User user, DiscoveryFilmRef film)
     {
-        // An owned film always plays; a virtual one only once a local trailer is attached.
-        if (_sync.FindOwned(user, film.TmdbId, film.ImdbId) is { } owned)
+        // An owned title always plays; a virtual one only once a local trailer is attached. Each by the ref's own type,
+        // so a show never resolves to a film with the same TMDB id, nor a film to a show.
+        if (_sync.FindOwnedTitle(user, film.TmdbId, film.ImdbId, film.Type) is { } owned)
         {
             return owned;
         }
 
-        var virtualFilm = _sync.FindFilm(film.TmdbId);
-        return virtualFilm is not null && virtualFilm.IsVisibleStandalone(user) && virtualFilm.GetExtras(_trailerTypes, user).Any()
-            ? virtualFilm
+        var virtualTitle = _sync.FindTitle(film.TmdbId, film.Type);
+        return virtualTitle is not null && virtualTitle.IsVisibleStandalone(user) && virtualTitle.GetExtras(_trailerTypes, user).Any()
+            ? virtualTitle
             : null;
     }
 
     private BaseItem? Resolve(User user, DiscoveryFilmRef film)
     {
-        // The owned film comes from a normal user query, so it is already filtered for the user. The virtual film is
-        // checked the way the detail endpoint (GetItemById with a user) checks it, so rows and film pages agree.
-        if (_sync.FindOwned(user, film.TmdbId, film.ImdbId) is { } owned)
+        // The owned title comes from a normal user query, so it is already filtered for the user. The virtual title is
+        // checked the way the detail endpoint (GetItemById with a user) checks it, so rows and title pages agree.
+        if (_sync.FindOwnedTitle(user, film.TmdbId, film.ImdbId, film.Type) is { } owned)
         {
             return owned;
         }
 
-        var virtualFilm = _sync.FindFilm(film.TmdbId);
-        return virtualFilm is not null && virtualFilm.IsVisibleStandalone(user) ? virtualFilm : null;
+        var virtualTitle = _sync.FindTitle(film.TmdbId, film.Type);
+        return virtualTitle is not null && virtualTitle.IsVisibleStandalone(user) ? virtualTitle : null;
     }
 
-    private readonly record struct ReadinessKey(Guid UserId, DateOnly Day, string Salt, int MinReadyFilms);
+    // The saved picks of a type. A Movie row keeps the store calls it made before shows (the Movie overloads).
+    private Task<IReadOnlyList<string>?> GetSnapshotAsync(Guid userId, DateOnly day, DiscoveryMediaType type, CancellationToken cancellationToken)
+        => type == DiscoveryMediaType.Movie
+            ? _store.GetPickSnapshotAsync(userId, day, cancellationToken)
+            : _store.GetPickSnapshotAsync(userId, day, type, cancellationToken);
+
+    private Task<IReadOnlyList<string>> AddSnapshotAsync(Guid userId, DateOnly day, DiscoveryMediaType type, string? salt, IReadOnlyList<string> listIds, CancellationToken cancellationToken)
+        => type == DiscoveryMediaType.Movie
+            ? _store.AddPickSnapshotAsync(userId, day, salt, listIds, cancellationToken)
+            : _store.AddPickSnapshotAsync(userId, day, type, salt, listIds, cancellationToken);
+
+    private Task<bool> RemoveSnapshotAsync(Guid userId, DateOnly day, DiscoveryMediaType type, IReadOnlyList<string> listIds, CancellationToken cancellationToken)
+        => type == DiscoveryMediaType.Movie
+            ? _store.RemovePickSnapshotAsync(userId, day, listIds, cancellationToken)
+            : _store.RemovePickSnapshotAsync(userId, day, type, listIds, cancellationToken);
+
+    private readonly record struct ReadinessKey(Guid UserId, DateOnly Day, DiscoveryMediaType Type, string Salt, int MinReadyFilms);
 
     private sealed record ReadinessEntry(IReadOnlyList<string> ListIds, DateTimeOffset Expires, long Generation);
 }

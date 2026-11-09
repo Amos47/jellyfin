@@ -8,6 +8,7 @@ using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Discovery;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Controller.Library;
 using Moq;
 using Xunit;
@@ -509,6 +510,46 @@ public sealed class DiscoveryRowPlannerTests : IDisposable
         Assert.False(_planner.IsPlayable(_user, new DiscoveryFilmRef(3, null)));
         Assert.True(_planner.IsPlayable(_user, new DiscoveryFilmRef(4, null)));
         Assert.False(_planner.IsPlayable(_user, new DiscoveryFilmRef(99, null)));
+    }
+
+    [Fact]
+    public async Task PickedLists_Series_OnlySeriesLists_SnapshotKeyedBySeries()
+    {
+        // A film and a show with one TMDB id; each list resolves only its own type.
+        Film(1, trailer: true);
+        var show = new Mock<Series> { CallBase = true };
+        show.Setup(f => f.IsVisibleStandalone(_user)).Returns(true);
+        show.Object.Id = Guid.NewGuid();
+        _withTrailer.Add(show.Object.Id);
+        _sync.Setup(s => s.FindSeries(1)).Returns(show.Object);
+
+        // A show's extras look up its library options (series grouping) first.
+        var libraryManager = new Mock<ILibraryManager>();
+        libraryManager
+            .Setup(m => m.GetItemList(It.IsAny<InternalItemsQuery>()))
+            .Returns<InternalItemsQuery>(q => q.OwnerIds.Any(_withTrailer.Contains) ? [new Video { Id = Guid.NewGuid() }] : []);
+        libraryManager.Setup(m => m.GetLibraryOptions(It.IsAny<BaseItem>())).Returns(new MediaBrowser.Model.Configuration.LibraryOptions { EnableAutomaticSeriesGrouping = false });
+        BaseItem.LibraryManager = libraryManager.Object;
+        var films = List("films", 1);
+        var shows = new DiscoveryList("shows", "Shows", "tests", [new DiscoveryFilmRef(1, null, DiscoveryMediaType.Series)], null, DiscoveryMediaType.Series);
+        SetLists(films, shows);
+        var seriesSnapshots = new List<IReadOnlyList<string>>();
+        _store
+            .Setup(s => s.AddPickSnapshotAsync(_user.Id, _day, DiscoveryMediaType.Series, It.IsAny<string?>(), It.IsAny<IReadOnlyList<string>>(), It.IsAny<CancellationToken>()))
+            .Callback<Guid, DateOnly, DiscoveryMediaType, string?, IReadOnlyList<string>, CancellationToken>((_, _, _, _, ids, _) => seriesSnapshots.Add(ids))
+            .ReturnsAsync((Guid _, DateOnly _, DiscoveryMediaType _, string? _, IReadOnlyList<string> ids, CancellationToken _) => ids);
+        var rules = new DiscoveryPickRules(true, 1);
+
+        var pickedShows = await _planner.GetPickedListsAsync(_user, 3, rules, _day, DiscoveryMediaType.Series, Ct);
+        var pickedFilms = await _planner.GetPickedListsAsync(_user, 3, rules, _day, Ct);
+
+        Assert.Equal(new[] { "shows" }, pickedShows.Select(l => l.Id));
+        Assert.Equal(new[] { "films" }, pickedFilms.Select(l => l.Id));
+        Assert.Equal(new[] { "shows" }, Assert.Single(seriesSnapshots));
+        Assert.Equal(new[] { "films" }, _snapshots[(_user.Id, _day)]);
+        Assert.Equal(show.Object.Id, Assert.Single(_planner.GetRowItems(_user, shows, true)).Item.Id);
+        Assert.Equal(_films[1].Id, Assert.Single(_planner.GetRowItems(_user, films, true)).Item.Id);
+        _store.Verify(s => s.GetPickSnapshotAsync(_user.Id, _day, DiscoveryMediaType.Series, It.IsAny<CancellationToken>()));
     }
 
     private sealed class FakeTime : TimeProvider

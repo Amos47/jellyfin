@@ -18,6 +18,12 @@ public class CustomUserListItem
     public int TmdbId { get; set; }
 
     /// <summary>
+    /// Gets or sets the media type of the TMDB id: <c>Movie</c> or <c>Series</c>. Part of the key; rows from before
+    /// shows are <c>Movie</c>.
+    /// </summary>
+    public string MediaType { get; set; } = CustomMediaTypes.Movie;
+
+    /// <summary>
     /// Gets or sets the IMDb id of the film, if known.
     /// </summary>
     public string? ImdbId { get; set; }

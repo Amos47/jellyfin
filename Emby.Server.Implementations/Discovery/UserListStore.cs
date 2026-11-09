@@ -52,8 +52,13 @@ public sealed class UserListStore : IUserListStore, IDisposable
         => (await ReadListsAsync(userId, listId, cancellationToken).ConfigureAwait(false)).FirstOrDefault();
 
     /// <inheritdoc />
-    public async Task<bool> AddFilmAsync(Guid userId, Guid listId, int tmdbId, string? imdbId, CancellationToken cancellationToken)
+    public Task<bool> AddFilmAsync(Guid userId, Guid listId, int tmdbId, string? imdbId, CancellationToken cancellationToken)
+        => AddFilmAsync(userId, listId, tmdbId, DiscoveryMediaType.Movie, imdbId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<bool> AddFilmAsync(Guid userId, Guid listId, int tmdbId, DiscoveryMediaType type, string? imdbId, CancellationToken cancellationToken)
     {
+        var mediaType = DiscoveryMediaTypes.ToStored(type);
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -66,11 +71,11 @@ public sealed class UserListStore : IUserListStore, IDisposable
                 }
 
                 var existing = await context.UserListItems
-                    .FirstOrDefaultAsync(i => i.ListId.Equals(listId) && i.TmdbId == tmdbId, cancellationToken)
+                    .FirstOrDefaultAsync(i => i.ListId.Equals(listId) && i.TmdbId == tmdbId && i.MediaType == mediaType, cancellationToken)
                     .ConfigureAwait(false);
                 if (existing is null)
                 {
-                    context.UserListItems.Add(new CustomUserListItem { ListId = listId, TmdbId = tmdbId, ImdbId = imdbId, AddedAt = DateTime.UtcNow });
+                    context.UserListItems.Add(new CustomUserListItem { ListId = listId, TmdbId = tmdbId, MediaType = mediaType, ImdbId = imdbId, AddedAt = DateTime.UtcNow });
                 }
                 else if (existing.ImdbId is null && imdbId is not null)
                 {
@@ -88,8 +93,13 @@ public sealed class UserListStore : IUserListStore, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<bool> RemoveFilmAsync(Guid userId, Guid listId, int tmdbId, CancellationToken cancellationToken)
+    public Task<bool> RemoveFilmAsync(Guid userId, Guid listId, int tmdbId, CancellationToken cancellationToken)
+        => RemoveFilmAsync(userId, listId, tmdbId, DiscoveryMediaType.Movie, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<bool> RemoveFilmAsync(Guid userId, Guid listId, int tmdbId, DiscoveryMediaType type, CancellationToken cancellationToken)
     {
+        var mediaType = DiscoveryMediaTypes.ToStored(type);
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -102,7 +112,7 @@ public sealed class UserListStore : IUserListStore, IDisposable
                 }
 
                 await context.UserListItems
-                    .Where(i => i.ListId.Equals(listId) && i.TmdbId == tmdbId)
+                    .Where(i => i.ListId.Equals(listId) && i.TmdbId == tmdbId && i.MediaType == mediaType)
                     .ExecuteDeleteAsync(cancellationToken)
                     .ConfigureAwait(false);
                 return true;
@@ -115,8 +125,13 @@ public sealed class UserListStore : IUserListStore, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<bool?> ToggleAsync(Guid userId, Guid listId, int tmdbId, string? imdbId, CancellationToken cancellationToken)
+    public Task<bool?> ToggleAsync(Guid userId, Guid listId, int tmdbId, string? imdbId, CancellationToken cancellationToken)
+        => ToggleAsync(userId, listId, tmdbId, DiscoveryMediaType.Movie, imdbId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<bool?> ToggleAsync(Guid userId, Guid listId, int tmdbId, DiscoveryMediaType type, string? imdbId, CancellationToken cancellationToken)
     {
+        var mediaType = DiscoveryMediaTypes.ToStored(type);
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -130,7 +145,7 @@ public sealed class UserListStore : IUserListStore, IDisposable
                 }
 
                 var removed = await context.UserListItems
-                    .Where(i => i.ListId.Equals(listId) && i.TmdbId == tmdbId)
+                    .Where(i => i.ListId.Equals(listId) && i.TmdbId == tmdbId && i.MediaType == mediaType)
                     .ExecuteDeleteAsync(cancellationToken)
                     .ConfigureAwait(false);
                 if (removed > 0)
@@ -138,7 +153,7 @@ public sealed class UserListStore : IUserListStore, IDisposable
                     return false;
                 }
 
-                context.UserListItems.Add(new CustomUserListItem { ListId = listId, TmdbId = tmdbId, ImdbId = imdbId, AddedAt = DateTime.UtcNow });
+                context.UserListItems.Add(new CustomUserListItem { ListId = listId, TmdbId = tmdbId, MediaType = mediaType, ImdbId = imdbId, AddedAt = DateTime.UtcNow });
                 await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
                 return true;
             }
@@ -178,13 +193,19 @@ public sealed class UserListStore : IUserListStore, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlySet<int>> GetListedTmdbIdsAsync(CancellationToken cancellationToken)
+    public Task<IReadOnlySet<int>> GetListedTmdbIdsAsync(CancellationToken cancellationToken)
+        => GetListedTmdbIdsAsync(DiscoveryMediaType.Movie, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlySet<int>> GetListedTmdbIdsAsync(DiscoveryMediaType type, CancellationToken cancellationToken)
     {
+        var mediaType = DiscoveryMediaTypes.ToStored(type);
         var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using (context.ConfigureAwait(false))
         {
             var ids = await context.UserListItems
                 .AsNoTracking()
+                .Where(i => i.MediaType == mediaType)
                 .Select(i => i.TmdbId)
                 .Distinct()
                 .ToListAsync(cancellationToken)
@@ -251,7 +272,8 @@ public sealed class UserListStore : IUserListStore, IDisposable
                     l.Items
                         .OrderByDescending(i => i.AddedAt)
                         .ThenByDescending(i => i.TmdbId)
-                        .Select(i => new UserListFilm(i.TmdbId, i.ImdbId, i.AddedAt))
+                        .ThenBy(i => i.MediaType, StringComparer.Ordinal)
+                        .Select(i => new UserListFilm(i.TmdbId, i.ImdbId, i.AddedAt, DiscoveryMediaTypes.FromStored(i.MediaType)))
                         .ToArray()))
                 .ToList();
         }

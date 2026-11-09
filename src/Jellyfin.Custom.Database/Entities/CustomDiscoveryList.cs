@@ -33,6 +33,12 @@ public class CustomDiscoveryList
     public string? Group { get; set; }
 
     /// <summary>
+    /// Gets or sets the media type of the list's films: <c>Movie</c> or <c>Series</c>. Lists from before shows are
+    /// <c>Movie</c>.
+    /// </summary>
+    public string ItemType { get; set; } = CustomMediaTypes.Movie;
+
+    /// <summary>
     /// Gets or sets the date the list was last modified.
     /// </summary>
     public DateTime DateModified { get; set; }

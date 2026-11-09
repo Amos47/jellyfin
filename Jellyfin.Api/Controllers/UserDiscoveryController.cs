@@ -232,31 +232,41 @@ public class UserDiscoveryController : BaseJellyfinApiController
     /// <param name="listId">The list id.</param>
     /// <param name="tmdbId">The TMDB id of the film.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
+    /// <param name="type">Optional: the media type of the TMDB id, Movie (the default) or Series.</param>
     /// <response code="200">Film added; the updated list returned.</response>
     /// <response code="404">The user has no list with that id, the server doesn't know the film, or the caller has no user.</response>
     /// <returns>The updated list.</returns>
     [HttpPost("UserLists/{listId}/Films/{tmdbId}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UserListDto>> AddUserListFilm([FromRoute, Required] Guid listId, [FromRoute, Required] int tmdbId, CancellationToken cancellationToken)
+    public async Task<ActionResult<UserListDto>> AddUserListFilm(
+        [FromRoute, Required] Guid listId,
+        [FromRoute, Required] int tmdbId,
+        CancellationToken cancellationToken,
+        [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
+        if (!Enum.IsDefined(type))
+        {
+            return BadRequest("The type must be Movie or Series.");
+        }
+
         if (GetUser() is not { } user || tmdbId <= 0)
         {
             return NotFound();
         }
 
-        // A discovery film the user may see, else the user's own film: never a film the server doesn't know. Checked
-        // and added under the film sync's lock, so a sync can't delete the film in between. Not the request's token for
-        // the add: once added, the film stays even if the client hangs up.
+        // A discovery title of that type the user may see, else the user's own one: never a title the server doesn't
+        // know, and a show only as a show. Checked and added under the film sync's lock, so a sync can't delete the
+        // title in between. Not the request's token for the add: once added, the title stays even if the client hangs up.
         var added = await _filmSync.RunExclusiveAsync(
             async () =>
             {
                 string? imdbId;
-                if (_filmSync.FindFilm(tmdbId) is { } film && film.IsVisibleStandalone(user))
+                if (_filmSync.FindTitle(tmdbId, type) is { } film && film.IsVisibleStandalone(user))
                 {
                     imdbId = film.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Imdb);
                 }
-                else if (_filmSync.FindOwned(user, tmdbId, null) is { } owned)
+                else if (_filmSync.FindOwnedTitle(user, tmdbId, null, type) is { } owned)
                 {
                     imdbId = owned.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Imdb);
                 }
@@ -265,7 +275,7 @@ public class UserDiscoveryController : BaseJellyfinApiController
                     return false;
                 }
 
-                return await _userLists.AddFilmAsync(user.Id, listId, tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, CancellationToken.None).ConfigureAwait(false);
+                return await _userLists.AddFilmAsync(user.Id, listId, tmdbId, type, string.IsNullOrEmpty(imdbId) ? null : imdbId, CancellationToken.None).ConfigureAwait(false);
             },
             cancellationToken).ConfigureAwait(false);
         if (!added)
@@ -282,16 +292,26 @@ public class UserDiscoveryController : BaseJellyfinApiController
     /// <param name="listId">The list id.</param>
     /// <param name="tmdbId">The TMDB id of the film.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
+    /// <param name="type">Optional: the media type of the TMDB id, Movie (the default) or Series.</param>
     /// <response code="200">Film removed; the updated list returned.</response>
     /// <response code="404">The user has no list with that id, or the caller has no user.</response>
     /// <returns>The updated list.</returns>
     [HttpDelete("UserLists/{listId}/Films/{tmdbId}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UserListDto>> RemoveUserListFilm([FromRoute, Required] Guid listId, [FromRoute, Required] int tmdbId, CancellationToken cancellationToken)
+    public async Task<ActionResult<UserListDto>> RemoveUserListFilm(
+        [FromRoute, Required] Guid listId,
+        [FromRoute, Required] int tmdbId,
+        CancellationToken cancellationToken,
+        [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
+        if (!Enum.IsDefined(type))
+        {
+            return BadRequest("The type must be Movie or Series.");
+        }
+
         if (GetUser() is not { } user
-            || !await _userLists.RemoveFilmAsync(user.Id, listId, tmdbId, CancellationToken.None).ConfigureAwait(false))
+            || !await _userLists.RemoveFilmAsync(user.Id, listId, tmdbId, type, CancellationToken.None).ConfigureAwait(false))
         {
             return NotFound();
         }
@@ -305,7 +325,7 @@ public class UserDiscoveryController : BaseJellyfinApiController
             list.Name,
             list.IsDefault,
             list.PageListId,
-            list.Films.Select(f => new UserListFilmDto(f.TmdbId, f.ImdbId, f.AddedAt)).ToArray());
+            list.Films.Select(f => new UserListFilmDto(f.TmdbId, f.ImdbId, f.AddedAt, f.Type)).ToArray());
 
     private static Guid? FirstWith(IEnumerable<BaseItem> films, ImageType type)
         => films.FirstOrDefault(f => f.HasImage(type))?.Id;

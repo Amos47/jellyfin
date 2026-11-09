@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using MediaBrowser.Controller.Discovery;
 
 namespace Jellyfin.Api.Models.DiscoveryDtos;
 
@@ -12,4 +13,10 @@ namespace Jellyfin.Api.Models.DiscoveryDtos;
 /// Optional: the group of the list, at most 100 characters (trimmed); blank or missing means none. A user's rows show
 /// at most one list of a group a day; a list without a group is a group of its own.
 /// </param>
-public sealed record DiscoveryListUpdateDto(string Title, string Source, IReadOnlyList<DiscoveryFilmDto> Films, string? Group = null);
+/// <param name="ItemType">Optional: the media type of the list's films, <c>Movie</c> or <c>Series</c>; missing means Movie. A list holds one type.</param>
+public sealed record DiscoveryListUpdateDto(
+    string Title,
+    string Source,
+    IReadOnlyList<DiscoveryFilmDto> Films,
+    string? Group = null,
+    DiscoveryMediaType? ItemType = null);

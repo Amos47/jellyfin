@@ -31,6 +31,7 @@ namespace Jellyfin.Server.Integration.Tests.Controllers
             HomeRowProviderIds.NewReleases,
             HomeRowProviderIds.Genre,
             HomeRowProviderIds.MovieDiscovery,
+            HomeRowProviderIds.ShowDiscovery,
             HomeRowProviderIds.UserList
         ];
 
@@ -56,7 +57,7 @@ namespace Jellyfin.Server.Integration.Tests.Controllers
         }
 
         [Fact]
-        public async Task Providers_ListsAllFourteenIds()
+        public async Task Providers_ListsAllFifteenIds()
         {
             var client = await CreateClientAsync();
 

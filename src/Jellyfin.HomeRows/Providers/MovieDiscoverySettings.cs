@@ -10,8 +10,8 @@ using MediaBrowser.Controller.Discovery;
 namespace Jellyfin.HomeRows.Providers;
 
 /// <summary>
-/// Fork: a user's discovery settings, from the enabled Movie discovery rows of their effective layout, read the way
-/// <see cref="MovieDiscoveryProvider"/> reads them.
+/// Fork: a user's discovery settings, from the enabled Movie discovery rows (films) or Show discovery rows (shows) of
+/// their effective layout, read the way <see cref="DiscoveryRowProvider"/> reads them.
 /// </summary>
 public sealed class MovieDiscoverySettings : IDiscoveryUserSettings
 {
@@ -27,20 +27,31 @@ public sealed class MovieDiscoverySettings : IDiscoveryUserSettings
     }
 
     /// <inheritdoc />
-    public async Task<bool> GetExternalTrailersAsync(User user, CancellationToken cancellationToken)
+    public Task<bool> GetExternalTrailersAsync(User user, CancellationToken cancellationToken)
+        => GetExternalTrailersAsync(user, DiscoveryMediaType.Movie, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<bool> GetExternalTrailersAsync(User user, DiscoveryMediaType type, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
+
+        var provider = GetProviderId(type);
 
         var layout = await _configuration.GetEffectiveLayoutAsync(user, cancellationToken).ConfigureAwait(false);
         return layout.Rows.Any(row => row.Row.Enabled
             && row.IsAvailable
-            && string.Equals(row.Row.Provider, HomeRowProviderIds.MovieDiscovery, StringComparison.Ordinal)
-            && MovieDiscoveryProvider.GetExternalTrailers(row.Row.Config));
+            && string.Equals(row.Row.Provider, provider, StringComparison.Ordinal)
+            && DiscoveryRowProvider.GetExternalTrailers(row.Row.Config));
     }
 
     /// <inheritdoc />
-    public async Task<int> GetReadyThresholdAsync(CancellationToken cancellationToken)
+    public Task<int> GetReadyThresholdAsync(CancellationToken cancellationToken)
+        => GetReadyThresholdAsync(DiscoveryMediaType.Movie, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<int> GetReadyThresholdAsync(DiscoveryMediaType type, CancellationToken cancellationToken)
     {
+        var provider = GetProviderId(type);
         var layouts = new List<IReadOnlyList<HomeRowInstance>>();
         if (await _configuration.GetAdminDefaultAsync(cancellationToken).ConfigureAwait(false) is { } adminDefault)
         {
@@ -50,9 +61,17 @@ public sealed class MovieDiscoverySettings : IDiscoveryUserSettings
         layouts.AddRange(await _configuration.GetUserLayoutsAsync(cancellationToken).ConfigureAwait(false));
         return layouts
             .SelectMany(rows => rows)
-            .Where(row => row.Enabled && string.Equals(row.Provider, HomeRowProviderIds.MovieDiscovery, StringComparison.Ordinal))
-            .Select(row => MovieDiscoveryProvider.GetPickRules(row.Config).MinReadyFilms)
+            .Where(row => row.Enabled && string.Equals(row.Provider, provider, StringComparison.Ordinal))
+            .Select(row => DiscoveryRowProvider.GetPickRules(row.Config).MinReadyFilms)
             .DefaultIfEmpty(DiscoveryPickRules.DefaultMinReadyFilms)
             .Max();
     }
+
+    /// <summary>
+    /// Gets the id of the discovery row provider of a media type: Movie discovery for films, Show discovery for shows.
+    /// </summary>
+    /// <param name="type">The media type.</param>
+    /// <returns>The provider id.</returns>
+    internal static string GetProviderId(DiscoveryMediaType type)
+        => type == DiscoveryMediaType.Series ? HomeRowProviderIds.ShowDiscovery : HomeRowProviderIds.MovieDiscovery;
 }

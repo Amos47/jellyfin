@@ -1,13 +1,16 @@
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using MediaBrowser.Controller.Entities;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Model.Entities;
 
 namespace MediaBrowser.Controller.Discovery;
 
 /// <summary>
-/// Fork: tells when a download request is done. A request is done once the film is in a library
-/// (<see cref="IDiscoveryFilmSync.FindOwned(int, string?)"/>); the server sets that itself, on each read of the
+/// Fork: tells when a download request is done. A request is done once its title is in a library
+/// (<see cref="DiscoveryTitles.FindOwnedTitle(IDiscoveryFilmSync, int, string?, DiscoveryMediaType)"/>: a film for a
+/// Movie request, a show for a Series one); the server sets that itself, on each read of the
 /// request (the film's actions, the requests list, the protected films), since it is the one that sees the film.
 /// </summary>
 public static class DiscoveryRequestDone
@@ -26,12 +29,12 @@ public static class DiscoveryRequestDone
         DiscoveryRequest? request,
         CancellationToken cancellationToken)
     {
-        if (request is not { IsActive: true } || !IsOwned(filmSync, request.TmdbId))
+        if (request is not { IsActive: true } || !IsOwned(filmSync, request.TmdbId, request.Type))
         {
             return request;
         }
 
-        return await store.SetStateAsync(request.TmdbId, DiscoveryRequest.StateDone, cancellationToken).ConfigureAwait(false) ?? request;
+        return await store.SetStateAsync(request.TmdbId, request.Type, DiscoveryRequest.StateDone, cancellationToken).ConfigureAwait(false) ?? request;
     }
 
     /// <summary>
@@ -64,10 +67,26 @@ public static class DiscoveryRequestDone
     /// <param name="tmdbId">The TMDB id.</param>
     /// <returns>True if a library has the film.</returns>
     public static bool IsOwned(IDiscoveryFilmSync filmSync, int tmdbId)
+        => IsOwned(filmSync, tmdbId, DiscoveryMediaType.Movie);
+
+    /// <summary>
+    /// Gets whether a title of a type is in a library: a library film for a Movie, a library show for a Series, matched
+    /// by TMDB id or by the IMDb id its discovery title has. A film never finishes a show's request, nor a show a film's.
+    /// </summary>
+    /// <param name="filmSync">The film sync.</param>
+    /// <param name="tmdbId">The TMDB id.</param>
+    /// <param name="type">The media type.</param>
+    /// <returns>True if a library has the title.</returns>
+    public static bool IsOwned(IDiscoveryFilmSync filmSync, int tmdbId, DiscoveryMediaType type)
     {
         System.ArgumentNullException.ThrowIfNull(filmSync);
 
-        var imdbId = filmSync.FindFilm(tmdbId)?.GetProviderId(MetadataProvider.Imdb);
-        return filmSync.FindOwned(tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId) is not null;
+        var imdbId = filmSync.FindTitle(tmdbId, type)?.GetProviderId(MetadataProvider.Imdb);
+        var owned = filmSync.FindOwnedTitle(tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId, type);
+
+        // A show counts once it has an episode: Sonarr adds the folder before anything downloads.
+        return type == DiscoveryMediaType.Series
+            ? owned is Folder folder && folder.GetRecursiveChildren(i => i is Episode).Count > 0
+            : owned is not null;
     }
 }

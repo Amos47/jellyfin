@@ -541,7 +541,8 @@ public class HomeRowConfigurationService : IHomeRowConfigurationService
 
         var expandingIds = rows
             .Where(r => _providerFactory.Get(r.Provider) is IExpandingHomeRowProvider
-                || string.Equals(r.Provider, HomeRowProviderIds.MovieDiscovery, StringComparison.Ordinal))
+                || string.Equals(r.Provider, HomeRowProviderIds.MovieDiscovery, StringComparison.Ordinal)
+                || string.Equals(r.Provider, HomeRowProviderIds.ShowDiscovery, StringComparison.Ordinal))
             .Select(r => r.Id);
         InsertAfterDiscovery(rows, new HomeRowInstance(NewRowId(expandingIds, Guid.NewGuid), HomeRowProviderIds.UserList, null, new JsonObject(), true));
         return Serialize(rows);

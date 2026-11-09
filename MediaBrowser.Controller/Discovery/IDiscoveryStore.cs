@@ -11,7 +11,7 @@ namespace MediaBrowser.Controller.Discovery;
 public interface IDiscoveryStore
 {
     /// <summary>
-    /// Gets all lists.
+    /// Gets all lists, of every type (<see cref="DiscoveryList.ItemType"/>).
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The lists.</returns>
@@ -26,7 +26,8 @@ public interface IDiscoveryStore
     Task<DiscoveryList?> GetListAsync(string id, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Adds a list, or replaces the list with the same id.
+    /// Adds a list, or replaces the list with the same id. Its films are stored with the list's
+    /// <see cref="DiscoveryList.ItemType"/>, whatever type their refs carry.
     /// </summary>
     /// <param name="list">The list.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
@@ -42,7 +43,7 @@ public interface IDiscoveryStore
     Task<bool> RemoveListAsync(string id, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Records that films were shown on a day. The first shown day is kept.
+    /// Records that films (<see cref="DiscoveryMediaType.Movie"/>) were shown on a day. The first shown day is kept.
     /// </summary>
     /// <param name="tmdbIds">The TMDB ids.</param>
     /// <param name="day">The day.</param>
@@ -51,11 +52,29 @@ public interface IDiscoveryStore
     Task MarkShownAsync(IEnumerable<int> tmdbIds, DateOnly day, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Gets the shown log by TMDB id.
+    /// Records that titles of a type were shown on a day. The first shown day is kept.
+    /// </summary>
+    /// <param name="tmdbIds">The TMDB ids.</param>
+    /// <param name="type">The media type of the ids.</param>
+    /// <param name="day">The day.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>A task.</returns>
+    Task MarkShownAsync(IEnumerable<int> tmdbIds, DiscoveryMediaType type, DateOnly day, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gets the shown log of the films (<see cref="DiscoveryMediaType.Movie"/>) by TMDB id.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The log.</returns>
     Task<IReadOnlyDictionary<int, DiscoveryShown>> GetShownAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gets the shown log of one type by TMDB id.
+    /// </summary>
+    /// <param name="type">The media type.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The log.</returns>
+    Task<IReadOnlyDictionary<int, DiscoveryShown>> GetShownAsync(DiscoveryMediaType type, CancellationToken cancellationToken);
 
     /// <summary>
     /// Gets the re-pick salt of a day.
@@ -66,8 +85,9 @@ public interface IDiscoveryStore
     Task<string?> GetPickSaltAsync(DateOnly day, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Sets the re-pick salt of a day, replacing the one it had, and removes every user's saved picks of that day
-    /// (<see cref="GetPickSnapshotAsync"/>) so they are picked afresh. Salts of days more than a week before the
+    /// Sets the re-pick salt of a day, replacing the one it had, and removes every user's saved picks of that day, of
+    /// every type (<see cref="GetPickSnapshotAsync(Guid, DateOnly, CancellationToken)"/>), so they are picked afresh. The
+    /// salt is shared by the types. Salts of days more than a week before the
     /// server's local today are pruned.
     /// </summary>
     /// <param name="day">The server's local date.</param>
@@ -77,13 +97,23 @@ public interface IDiscoveryStore
     Task SetPickSaltAsync(DateOnly day, string salt, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Gets a user's saved picks of a day.
+    /// Gets a user's saved picks of a day, of the movie lists (<see cref="DiscoveryMediaType.Movie"/>).
     /// </summary>
     /// <param name="userId">The user id.</param>
     /// <param name="day">The server's local date.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The picked list ids in display order, or null if none were saved.</returns>
     Task<IReadOnlyList<string>?> GetPickSnapshotAsync(Guid userId, DateOnly day, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gets a user's saved picks of a day, of the lists of one type. Picks are saved per user, day and type.
+    /// </summary>
+    /// <param name="userId">The user id.</param>
+    /// <param name="day">The server's local date.</param>
+    /// <param name="type">The lists' media type.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The picked list ids in display order, or null if none were saved.</returns>
+    Task<IReadOnlyList<string>?> GetPickSnapshotAsync(Guid userId, DateOnly day, DiscoveryMediaType type, CancellationToken cancellationToken);
 
     /// <summary>
     /// Saves a user's picks of a day, unless picks are already saved for that user and day (the first save wins) or
@@ -99,6 +129,20 @@ public interface IDiscoveryStore
     Task<IReadOnlyList<string>> AddPickSnapshotAsync(Guid userId, DateOnly day, string? salt, IReadOnlyList<string> listIds, CancellationToken cancellationToken);
 
     /// <summary>
+    /// Saves a user's picks of a day of the lists of one type, as
+    /// <see cref="AddPickSnapshotAsync(Guid, DateOnly, string?, IReadOnlyList{string}, CancellationToken)"/> does for
+    /// the movie lists.
+    /// </summary>
+    /// <param name="userId">The user id.</param>
+    /// <param name="day">The server's local date.</param>
+    /// <param name="type">The lists' media type.</param>
+    /// <param name="salt">The re-pick salt the picks were made with, or null for none.</param>
+    /// <param name="listIds">The picked list ids, in display order.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The picks that hold: the saved ones if some were already saved, else <paramref name="listIds"/>.</returns>
+    Task<IReadOnlyList<string>> AddPickSnapshotAsync(Guid userId, DateOnly day, DiscoveryMediaType type, string? salt, IReadOnlyList<string> listIds, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Removes a user's saved picks of a day, but only while they are still <paramref name="listIds"/>, so picks
     /// another read saved meanwhile are kept.
     /// </summary>
@@ -108,4 +152,16 @@ public interface IDiscoveryStore
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>True if the picks were removed.</returns>
     Task<bool> RemovePickSnapshotAsync(Guid userId, DateOnly day, IReadOnlyList<string> listIds, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Removes a user's saved picks of a day of the lists of one type, but only while they are still
+    /// <paramref name="listIds"/>.
+    /// </summary>
+    /// <param name="userId">The user id.</param>
+    /// <param name="day">The server's local date.</param>
+    /// <param name="type">The lists' media type.</param>
+    /// <param name="listIds">The saved picks expected, in display order.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>True if the picks were removed.</returns>
+    Task<bool> RemovePickSnapshotAsync(Guid userId, DateOnly day, DiscoveryMediaType type, IReadOnlyList<string> listIds, CancellationToken cancellationToken);
 }

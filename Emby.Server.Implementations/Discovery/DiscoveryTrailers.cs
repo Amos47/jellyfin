@@ -16,7 +16,7 @@ using Microsoft.Extensions.Logging;
 namespace Emby.Server.Implementations.Discovery;
 
 /// <summary>
-/// Fork: makes pushed trailer files local trailers of discovery films, the way <c>LibraryManager.FindExtras</c> and
+/// Fork: makes pushed trailer files local trailers of discovery films (and of discovery shows, by type), the way <c>LibraryManager.FindExtras</c> and
 /// <c>BaseItem.RefreshExtras</c> make <c>-trailer</c> files extras of a library film: a <see cref="Video"/> with
 /// <see cref="ExtraType.Trailer"/>, owned by the film and with no parent. Files are only ever read, never deleted.
 /// </summary>
@@ -66,9 +66,13 @@ public sealed class DiscoveryTrailers : IDiscoveryTrailers, IDisposable
     public void Dispose() => _lock.Dispose();
 
     /// <inheritdoc />
-    public async Task<DiscoveryTrailerResult> SetAsync(int tmdbId, string path, CancellationToken cancellationToken)
+    public Task<DiscoveryTrailerResult> SetAsync(int tmdbId, string path, CancellationToken cancellationToken)
+        => SetAsync(tmdbId, DiscoveryMediaType.Movie, path, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<DiscoveryTrailerResult> SetAsync(int tmdbId, DiscoveryMediaType type, string path, CancellationToken cancellationToken)
     {
-        var film = _filmSync.FindFilm(tmdbId);
+        var film = _filmSync.FindTitle(tmdbId, type);
         if (film is null)
         {
             return DiscoveryTrailerResult.FilmNotFound;
@@ -91,8 +95,8 @@ public sealed class DiscoveryTrailers : IDiscoveryTrailers, IDisposable
         await _lock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            // A list sync may have deleted the film since the first look.
-            film = _filmSync.FindFilm(tmdbId);
+            // A list sync may have deleted the title since the first look.
+            film = _filmSync.FindTitle(tmdbId, type);
             if (film is null)
             {
                 return DiscoveryTrailerResult.FilmNotFound;
@@ -130,7 +134,7 @@ public sealed class DiscoveryTrailers : IDiscoveryTrailers, IDisposable
                     await trailer.UpdateToRepositoryAsync(ItemUpdateType.MetadataEdit, cancellationToken).ConfigureAwait(false);
                 }
             }
-            catch (DbUpdateException ex) when (_filmSync.FindFilm(tmdbId) is null)
+            catch (DbUpdateException ex) when (_filmSync.FindTitle(tmdbId, type) is null)
             {
                 // The sync deleted the film after the look above: the trailer's owner key no longer holds.
                 _logger.LogWarning(ex, "Discovery film for TMDB id {TmdbId} was removed while attaching {Path}", tmdbId, filePath);
@@ -147,9 +151,13 @@ public sealed class DiscoveryTrailers : IDiscoveryTrailers, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task RemoveAsync(int tmdbId, CancellationToken cancellationToken)
+    public Task RemoveAsync(int tmdbId, CancellationToken cancellationToken)
+        => RemoveAsync(tmdbId, DiscoveryMediaType.Movie, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task RemoveAsync(int tmdbId, DiscoveryMediaType type, CancellationToken cancellationToken)
     {
-        var film = _filmSync.FindFilm(tmdbId);
+        var film = _filmSync.FindTitle(tmdbId, type);
         if (film is null)
         {
             return;

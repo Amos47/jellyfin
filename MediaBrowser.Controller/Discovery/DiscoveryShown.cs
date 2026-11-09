@@ -8,4 +8,5 @@ namespace MediaBrowser.Controller.Discovery;
 /// <param name="TmdbId">The TMDB id.</param>
 /// <param name="FirstShown">The first day it was shown.</param>
 /// <param name="LastShown">The last day it was shown.</param>
-public record DiscoveryShown(int TmdbId, DateOnly FirstShown, DateOnly LastShown);
+/// <param name="Type">The media type of the TMDB id.</param>
+public record DiscoveryShown(int TmdbId, DateOnly FirstShown, DateOnly LastShown, DiscoveryMediaType Type = DiscoveryMediaType.Movie);

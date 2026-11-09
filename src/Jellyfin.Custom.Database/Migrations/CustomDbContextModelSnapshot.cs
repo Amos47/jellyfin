@@ -34,6 +34,12 @@ namespace Jellyfin.Custom.Database.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("ItemType")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("Movie");
+
                     b.Property<string>("Source")
                         .IsRequired()
                         .HasColumnType("TEXT");
@@ -72,11 +78,16 @@ namespace Jellyfin.Custom.Database.Migrations
                     b.Property<DateOnly>("Day")
                         .HasColumnType("TEXT");
 
+                    b.Property<string>("MediaType")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("Movie");
+
                     b.Property<string>("ListIdsJson")
                         .IsRequired()
                         .HasColumnType("TEXT");
 
-                    b.HasKey("UserId", "Day");
+                    b.HasKey("UserId", "Day", "MediaType");
 
                     b.HasIndex("Day");
 
@@ -88,6 +99,11 @@ namespace Jellyfin.Custom.Database.Migrations
                     b.Property<int>("TmdbId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("MediaType")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("Movie");
+
                     b.Property<string>("State")
                         .IsRequired()
                         .HasMaxLength(32)
@@ -96,7 +112,7 @@ namespace Jellyfin.Custom.Database.Migrations
                     b.Property<DateTime>("UpdatedAt")
                         .HasColumnType("TEXT");
 
-                    b.HasKey("TmdbId");
+                    b.HasKey("TmdbId", "MediaType");
 
                     b.HasIndex("State");
 
@@ -108,10 +124,15 @@ namespace Jellyfin.Custom.Database.Migrations
                     b.Property<int>("TmdbId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("MediaType")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("Movie");
+
                     b.Property<Guid>("UserId")
                         .HasColumnType("TEXT");
 
-                    b.HasKey("TmdbId", "UserId");
+                    b.HasKey("TmdbId", "MediaType", "UserId");
 
                     b.HasIndex("UserId");
 
@@ -138,13 +159,18 @@ namespace Jellyfin.Custom.Database.Migrations
                     b.Property<int>("TmdbId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("MediaType")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("Movie");
+
                     b.Property<DateOnly>("FirstShown")
                         .HasColumnType("TEXT");
 
                     b.Property<DateOnly>("LastShown")
                         .HasColumnType("TEXT");
 
-                    b.HasKey("TmdbId");
+                    b.HasKey("TmdbId", "MediaType");
 
                     b.ToTable("CustomDiscoveryShown", (string)null);
                 });
@@ -238,6 +264,11 @@ namespace Jellyfin.Custom.Database.Migrations
                     b.Property<int>("TmdbId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("MediaType")
+                        .HasMaxLength(16)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("Movie");
+
                     b.Property<DateTime>("AddedAt")
                         .HasColumnType("TEXT");
 
@@ -245,7 +276,7 @@ namespace Jellyfin.Custom.Database.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("TEXT");
 
-                    b.HasKey("ListId", "TmdbId");
+                    b.HasKey("ListId", "TmdbId", "MediaType");
 
                     b.HasIndex("TmdbId");
 
@@ -256,7 +287,7 @@ namespace Jellyfin.Custom.Database.Migrations
                 {
                     b.HasOne("Jellyfin.Custom.Database.Entities.CustomDiscoveryRequest", null)
                         .WithMany("Users")
-                        .HasForeignKey("TmdbId")
+                        .HasForeignKey("TmdbId", "MediaType")
                         .OnDelete(DeleteBehavior.Cascade)
                         .IsRequired();
                 });

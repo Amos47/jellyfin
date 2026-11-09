@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using MediaBrowser.Controller.Discovery;
 
 namespace Jellyfin.Api.Models.DiscoveryDtos;
 
@@ -17,4 +18,13 @@ namespace Jellyfin.Api.Models.DiscoveryDtos;
 /// Whether <paramref name="ReadyFilms"/> reaches the default minimum (5), so a Movie discovery row with default
 /// settings can pick the list.
 /// </param>
-public sealed record DiscoveryListDto(string Id, string Title, string Source, IReadOnlyList<DiscoveryFilmDto> Films, string? Group, int ReadyFilms, bool Ready);
+/// <param name="ItemType">The media type of the list's films: <c>Movie</c> or <c>Series</c>.</param>
+public sealed record DiscoveryListDto(
+    string Id,
+    string Title,
+    string Source,
+    IReadOnlyList<DiscoveryFilmDto> Films,
+    string? Group,
+    int ReadyFilms,
+    bool Ready,
+    DiscoveryMediaType ItemType);

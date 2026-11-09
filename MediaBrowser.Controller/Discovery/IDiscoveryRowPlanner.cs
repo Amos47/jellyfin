@@ -7,8 +7,9 @@ using Jellyfin.Database.Implementations.Entities;
 namespace MediaBrowser.Controller.Discovery;
 
 /// <summary>
-/// Fork: works out which discovery lists a user sees today and which films each shows. The one place that decides
-/// this, so the Movie discovery rows, the picks API and the trailer queue always agree.
+/// Fork: works out which discovery lists a user sees today and which titles each shows. The one place that decides
+/// this, so the Movie and Show discovery rows, the picks API and the trailer queue always agree. A list's titles
+/// resolve by their own type: a show never to a film with the same TMDB id.
 /// </summary>
 public interface IDiscoveryRowPlanner
 {
@@ -20,7 +21,7 @@ public interface IDiscoveryRowPlanner
     /// <see cref="DiscoveryPickRules.MinReadyFilms"/> films playable for the user (see <see cref="CountReadyFilms"/>).
     /// The user's first full pick of the day (one that fills <paramref name="maxRows"/>, or, when the stored lists can
     /// give fewer rows, one per group plus one per ungrouped list, holds all of them) is saved in full
-    /// (<see cref="IDiscoveryStore.AddPickSnapshotAsync"/>) and read back for the rest of the day, so lists becoming
+    /// (<see cref="IDiscoveryStore.AddPickSnapshotAsync(Guid, DateOnly, string?, IReadOnlyList{string}, CancellationToken)"/>) and read back for the rest of the day, so lists becoming
     /// ready (or unready) later don't change it; a smaller <paramref name="maxRows"/> takes a prefix, and saved lists
     /// that were deleted since are left out. A saved pick whose lists were all deleted is dropped and picked again. A
     /// smaller pick is not saved and is worked out again on later reads, through a readiness cache kept per user, day
@@ -37,6 +38,22 @@ public interface IDiscoveryRowPlanner
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The picked lists.</returns>
     Task<IReadOnlyList<DiscoveryList>> GetPickedListsAsync(User user, int maxRows, DiscoveryPickRules rules, DateOnly day, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gets the lists of a type picked for a user on a day, in display order, as
+    /// <see cref="GetPickedListsAsync(User, int, DiscoveryPickRules, DateOnly, CancellationToken)"/> (which is the
+    /// <see cref="DiscoveryMediaType.Movie"/> pick) picks them, among the lists of that <see cref="DiscoveryList.ItemType"/>
+    /// only: Movie discovery rows pick films, Show discovery rows shows. Each type has its own saved picks of the day
+    /// and its own readiness; the day's salt (and so a re-pick) is shared.
+    /// </summary>
+    /// <param name="user">The user.</param>
+    /// <param name="maxRows">The most lists to return.</param>
+    /// <param name="rules">The row's readiness rules.</param>
+    /// <param name="day">The server's local date.</param>
+    /// <param name="type">The media type of the lists.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The picked lists.</returns>
+    Task<IReadOnlyList<DiscoveryList>> GetPickedListsAsync(User user, int maxRows, DiscoveryPickRules rules, DateOnly day, DiscoveryMediaType type, CancellationToken cancellationToken);
 
     /// <summary>
     /// Gets the films of a list as the user sees them, in list order: the user's library film when they own it,

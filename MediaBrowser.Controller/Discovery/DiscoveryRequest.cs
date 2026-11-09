@@ -11,7 +11,8 @@ namespace MediaBrowser.Controller.Discovery;
 /// <param name="State">The state: <see cref="StateRequested"/>, <see cref="StateDownloading"/>, <see cref="StateFailed"/> or <see cref="StateDone"/>.</param>
 /// <param name="UpdatedAt">When the request last changed (UTC).</param>
 /// <param name="UserIds">The users who asked for the film.</param>
-public record DiscoveryRequest(int TmdbId, string State, DateTime UpdatedAt, IReadOnlyList<Guid> UserIds)
+/// <param name="Type">The media type of the TMDB id: one request per TMDB id and type.</param>
+public record DiscoveryRequest(int TmdbId, string State, DateTime UpdatedAt, IReadOnlyList<Guid> UserIds, DiscoveryMediaType Type = DiscoveryMediaType.Movie)
 {
     /// <summary>
     /// The state of a request the app hasn't picked up yet.

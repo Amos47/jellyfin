@@ -192,11 +192,11 @@ public class ItemActionsController : BaseJellyfinApiController
             return (item, false);
         }
 
-        if (film is Movie
-            && int.TryParse(film.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Tmdb), NumberStyles.None, CultureInfo.InvariantCulture, out var tmdbId)
-            && _filmSync.FindFilm(tmdbId) is { } copy
+        // A film's or a show's discovery copy, each by its own type.
+        if (DiscoveryTitles.TryGetTmdbId(film, out var tmdbId, out var type)
+            && _filmSync.FindTitle(tmdbId, type) is { } copy
             && copy.Id.Equals(film.Id)
-            && _filmSync.FindOwned(user, tmdbId, film.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Imdb)) is { } owned
+            && _filmSync.FindOwnedTitle(user, tmdbId, film.GetProviderId(MediaBrowser.Model.Entities.MetadataProvider.Imdb), type) is { } owned
             && _libraryManager.GetItemById(owned.Id) is { } ownedFilm)
         {
             return (ownedFilm, true);

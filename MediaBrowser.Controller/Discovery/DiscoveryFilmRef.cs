@@ -5,4 +5,6 @@ namespace MediaBrowser.Controller.Discovery;
 /// </summary>
 /// <param name="TmdbId">The TMDB id.</param>
 /// <param name="ImdbId">The IMDb id, if known.</param>
-public record DiscoveryFilmRef(int TmdbId, string? ImdbId);
+/// <param name="Type">The media type of the TMDB id. In a discovery list it is always the list's
+/// <see cref="DiscoveryList.ItemType"/>; in a user list it is each film's own.</param>
+public record DiscoveryFilmRef(int TmdbId, string? ImdbId, DiscoveryMediaType Type = DiscoveryMediaType.Movie);

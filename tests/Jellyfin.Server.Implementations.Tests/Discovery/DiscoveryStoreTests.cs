@@ -74,6 +74,52 @@ public sealed class DiscoveryStoreTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task SameTmdbId_MovieAndSeries_DoNotCollide()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var user = Guid.NewGuid();
+
+        // A list holds one type: its films take the list's type, whatever the refs say.
+        await _store.SetListAsync(new DiscoveryList("films", "Films", "test", [new(42, "tt42")]), ct);
+        await _store.SetListAsync(new DiscoveryList("shows", "Shows", "test", [new(42, null)], ItemType: DiscoveryMediaType.Series), ct);
+
+        var films = (await _store.GetListAsync("films", ct))!;
+        var shows = (await _store.GetListAsync("shows", ct))!;
+        Assert.Equal(DiscoveryMediaType.Movie, films.ItemType);
+        Assert.Equal(DiscoveryMediaType.Movie, Assert.Single(films.Films).Type);
+        Assert.Equal(DiscoveryMediaType.Series, shows.ItemType);
+        Assert.Equal(new DiscoveryFilmRef(42, null, DiscoveryMediaType.Series), Assert.Single(shows.Films));
+        Assert.Equal(
+            new[] { DiscoveryMediaType.Movie, DiscoveryMediaType.Series },
+            (await _store.GetListsAsync(ct)).Select(l => l.ItemType));
+
+        // The shown log is per type; without a type it is the movies'.
+        await _store.MarkShownAsync([42], today.AddDays(-2), ct);
+        await _store.MarkShownAsync([42], DiscoveryMediaType.Series, today, ct);
+        Assert.Equal(new DiscoveryShown(42, today.AddDays(-2), today.AddDays(-2)), (await _store.GetShownAsync(ct))[42]);
+        Assert.Equal(
+            new DiscoveryShown(42, today, today, DiscoveryMediaType.Series),
+            (await _store.GetShownAsync(DiscoveryMediaType.Series, ct))[42]);
+
+        // Saved picks are per user, day and type.
+        Assert.Equal(new[] { "films" }, await _store.AddPickSnapshotAsync(user, today, null, ["films"], ct));
+        Assert.Null(await _store.GetPickSnapshotAsync(user, today, DiscoveryMediaType.Series, ct));
+        Assert.Equal(new[] { "shows" }, await _store.AddPickSnapshotAsync(user, today, DiscoveryMediaType.Series, null, ["shows"], ct));
+        Assert.Equal(new[] { "films" }, await _store.GetPickSnapshotAsync(user, today, ct));
+        Assert.Equal(new[] { "shows" }, await _store.GetPickSnapshotAsync(user, today, DiscoveryMediaType.Series, ct));
+        Assert.False(await _store.RemovePickSnapshotAsync(user, today, DiscoveryMediaType.Series, ["films"], ct));
+        Assert.True(await _store.RemovePickSnapshotAsync(user, today, DiscoveryMediaType.Series, ["shows"], ct));
+        Assert.Equal(new[] { "films" }, await _store.GetPickSnapshotAsync(user, today, ct));
+
+        // The salt is shared: a re-pick clears the day's picks of every type.
+        await _store.AddPickSnapshotAsync(user, today, DiscoveryMediaType.Series, null, ["shows"], ct);
+        await _store.SetPickSaltAsync(today, "salt", ct);
+        Assert.Null(await _store.GetPickSnapshotAsync(user, today, ct));
+        Assert.Null(await _store.GetPickSnapshotAsync(user, today, DiscoveryMediaType.Series, ct));
+    }
+
+    [Fact]
     public async Task PickSalt_NoneByDefault_SetReplaces_PerDay()
     {
         var ct = TestContext.Current.CancellationToken;
