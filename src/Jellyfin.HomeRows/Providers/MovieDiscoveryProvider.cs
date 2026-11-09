@@ -103,9 +103,9 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(config);
 
-        // Every stored list, picked today or not: a client may still hold a row from an earlier pick.
+        // Every stored movie list, picked today or not: a client may still hold a row from an earlier pick.
         var lists = await _store.GetListsAsync(ct).ConfigureAwait(false);
-        return lists.Select(l => l.Id).ToArray();
+        return lists.Where(l => l.ItemType == DiscoveryMediaType.Movie).Select(l => l.Id).ToArray();
     }
 
     /// <inheritdoc />

@@ -70,13 +70,21 @@ public record UserList(Guid Id, Guid UserId, string Name, bool IsDefault, IReadO
     /// </summary>
     /// <param name="tmdbId">The TMDB id.</param>
     /// <returns>Whether the film is in the list.</returns>
-    public bool Contains(int tmdbId) => Films.Any(f => f.TmdbId == tmdbId);
+    public bool Contains(int tmdbId) => Contains(tmdbId, DiscoveryMediaType.Movie);
+
+    /// <summary>
+    /// Gets whether the list holds a title of a type.
+    /// </summary>
+    /// <param name="tmdbId">The TMDB id.</param>
+    /// <param name="type">The media type.</param>
+    /// <returns>Whether the title is in the list.</returns>
+    public bool Contains(int tmdbId, DiscoveryMediaType type) => Films.Any(f => f.TmdbId == tmdbId && f.Type == type);
 
     /// <summary>
     /// Gets the list as a <see cref="DiscoveryList"/>, so rows, pages and queues show it the way they show discovery
-    /// lists: its page list id, its name, and its films newest first.
+    /// lists: its page list id, its name, and its films newest first, each with its own type.
     /// </summary>
     /// <returns>The discovery list.</returns>
     public DiscoveryList ToDiscoveryList()
-        => new(PageListId, Name, Source, Films.Select(f => new DiscoveryFilmRef(f.TmdbId, f.ImdbId)).ToArray());
+        => new(PageListId, Name, Source, Films.Select(f => new DiscoveryFilmRef(f.TmdbId, f.ImdbId, f.Type)).ToArray());
 }

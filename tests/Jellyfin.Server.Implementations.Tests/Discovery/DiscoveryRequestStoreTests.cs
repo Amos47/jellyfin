@@ -119,6 +119,41 @@ public sealed class DiscoveryRequestStoreTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task SameTmdbId_MovieAndSeries_DoNotCollide()
+    {
+        var filmUser = Guid.NewGuid();
+        var showUser = Guid.NewGuid();
+
+        var film = await _store.RequestAsync(42, filmUser, Ct);
+        var show = await _store.RequestAsync(42, DiscoveryMediaType.Series, showUser, Ct);
+        Assert.Equal(DiscoveryMediaType.Movie, film.Type);
+        Assert.Equal(DiscoveryMediaType.Series, show.Type);
+        Assert.Equal(new[] { showUser }, show.UserIds);
+
+        // Each moves on its own.
+        Assert.Equal(DiscoveryRequest.StateDownloading, (await _store.SetStateAsync(42, DiscoveryMediaType.Series, DiscoveryRequest.StateDownloading, Ct))!.State);
+        var filmNow = (await _store.GetAsync(42, Ct))!;
+        Assert.Equal(DiscoveryRequest.StateRequested, filmNow.State);
+        Assert.Equal(new[] { filmUser }, filmNow.UserIds);
+        Assert.Equal(DiscoveryRequest.StateDownloading, (await _store.GetAsync(42, DiscoveryMediaType.Series, Ct))!.State);
+        Assert.Null(await _store.GetAsync(43, DiscoveryMediaType.Series, Ct));
+
+        // The list has both, each with its type.
+        var all = await _store.GetAllAsync(null, Ct);
+        Assert.Equal(new[] { DiscoveryMediaType.Movie, DiscoveryMediaType.Series }, all.Select(r => r.Type).Order());
+
+        // Active ids are per type; without a type they are the films'.
+        await _store.SetStateAsync(42, DiscoveryRequest.StateDone, Ct);
+        Assert.Empty(await _store.GetActiveTmdbIdsAsync(Ct));
+        Assert.Equal(new[] { 42 }, await _store.GetActiveTmdbIdsAsync(DiscoveryMediaType.Series, Ct));
+
+        // A deleted user leaves the other type's requesters alone.
+        await _store.RemoveUserAsync(showUser, Ct);
+        Assert.Empty((await _store.GetAsync(42, DiscoveryMediaType.Series, Ct))!.UserIds);
+        Assert.Equal(new[] { filmUser }, (await _store.GetAsync(42, Ct))!.UserIds);
+    }
+
+    [Fact]
     public async Task DownloadsEnabled_OffByDefault_Persists()
     {
         Assert.False(await _store.GetDownloadsEnabledAsync(Ct));

@@ -63,7 +63,10 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
             return [];
         }
 
-        var lists = await _store.GetListsAsync(cancellationToken).ConfigureAwait(false);
+        // The movie lists only: show lists have rows of their own.
+        var lists = (await _store.GetListsAsync(cancellationToken).ConfigureAwait(false))
+            .Where(l => l.ItemType == DiscoveryMediaType.Movie)
+            .ToList();
         if (!rules.RequireTrailer)
         {
             // Today's behaviour: any list with a film the user may see, picked afresh on every read.
@@ -232,6 +235,12 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
 
     private BaseItem? ResolvePlayable(User user, DiscoveryFilmRef film)
     {
+        // Only films resolve so far: a show must never resolve to a film with the same TMDB id.
+        if (film.Type != DiscoveryMediaType.Movie)
+        {
+            return null;
+        }
+
         // An owned film always plays; a virtual one only once a local trailer is attached.
         if (_sync.FindOwned(user, film.TmdbId, film.ImdbId) is { } owned)
         {
@@ -246,6 +255,12 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
 
     private BaseItem? Resolve(User user, DiscoveryFilmRef film)
     {
+        // Only films resolve so far, as in ResolvePlayable.
+        if (film.Type != DiscoveryMediaType.Movie)
+        {
+            return null;
+        }
+
         // The owned film comes from a normal user query, so it is already filtered for the user. The virtual film is
         // checked the way the detail endpoint (GetItemById with a user) checks it, so rows and film pages agree.
         if (_sync.FindOwned(user, film.TmdbId, film.ImdbId) is { } owned)

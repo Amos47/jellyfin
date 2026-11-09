@@ -1,5 +1,6 @@
 using Jellyfin.Custom.Database.Entities;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
 namespace Jellyfin.Custom.Database;
 
@@ -100,13 +101,15 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
             entity.HasKey(e => e.Id);
             entity.Property(e => e.Id).HasMaxLength(64).ValueGeneratedNever();
             entity.Property(e => e.Group).HasMaxLength(100);
+            MediaTypeColumn(entity.Property(e => e.ItemType));
         });
 
         modelBuilder.Entity<CustomDiscoveryShown>(entity =>
         {
             entity.ToTable("CustomDiscoveryShown");
-            entity.HasKey(e => e.TmdbId);
+            entity.HasKey(e => new { e.TmdbId, e.MediaType });
             entity.Property(e => e.TmdbId).ValueGeneratedNever();
+            MediaTypeColumn(entity.Property(e => e.MediaType));
         });
 
         modelBuilder.Entity<CustomDiscoveryPickSalt>(entity =>
@@ -119,8 +122,9 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
         modelBuilder.Entity<CustomDiscoveryPickSnapshot>(entity =>
         {
             entity.ToTable("CustomDiscoveryPickSnapshots");
-            entity.HasKey(e => new { e.UserId, e.Day });
+            entity.HasKey(e => new { e.UserId, e.Day, e.MediaType });
             entity.HasIndex(e => e.Day);
+            MediaTypeColumn(entity.Property(e => e.MediaType));
         });
 
         modelBuilder.Entity<CustomUserList>(entity =>
@@ -139,8 +143,9 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
         modelBuilder.Entity<CustomUserListItem>(entity =>
         {
             entity.ToTable("CustomUserListItems");
-            entity.HasKey(e => new { e.ListId, e.TmdbId });
+            entity.HasKey(e => new { e.ListId, e.TmdbId, e.MediaType });
             entity.Property(e => e.ImdbId).HasMaxLength(32);
+            MediaTypeColumn(entity.Property(e => e.MediaType));
             entity.HasIndex(e => e.TmdbId);
         });
 
@@ -154,17 +159,19 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
         modelBuilder.Entity<CustomDiscoveryRequest>(entity =>
         {
             entity.ToTable("CustomDiscoveryRequests");
-            entity.HasKey(e => e.TmdbId);
+            entity.HasKey(e => new { e.TmdbId, e.MediaType });
             entity.Property(e => e.TmdbId).ValueGeneratedNever();
+            MediaTypeColumn(entity.Property(e => e.MediaType));
             entity.Property(e => e.State).HasMaxLength(32);
             entity.HasIndex(e => e.State);
-            entity.HasMany(e => e.Users).WithOne().HasForeignKey(u => u.TmdbId).OnDelete(DeleteBehavior.Cascade);
+            entity.HasMany(e => e.Users).WithOne().HasForeignKey(u => new { u.TmdbId, u.MediaType }).OnDelete(DeleteBehavior.Cascade);
         });
 
         modelBuilder.Entity<CustomDiscoveryRequestUser>(entity =>
         {
             entity.ToTable("CustomDiscoveryRequestUsers");
-            entity.HasKey(e => new { e.TmdbId, e.UserId });
+            entity.HasKey(e => new { e.TmdbId, e.MediaType, e.UserId });
+            MediaTypeColumn(entity.Property(e => e.MediaType));
             entity.HasIndex(e => e.UserId);
         });
 
@@ -175,4 +182,9 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
             entity.Property(e => e.Key).HasMaxLength(100).ValueGeneratedNever();
         });
     }
+
+    // A media type column: a short name, Movie for the rows from before shows. Never generated: it is part of keys, and a
+    // key EF thinks the database fills in makes a new row with it set look like an existing one, so it isn't inserted.
+    private static void MediaTypeColumn(PropertyBuilder<string> property)
+        => property.HasMaxLength(CustomMediaTypes.MaxLength).HasDefaultValue(CustomMediaTypes.Movie).ValueGeneratedNever();
 }

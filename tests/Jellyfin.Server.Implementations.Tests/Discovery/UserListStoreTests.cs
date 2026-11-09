@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Emby.Server.Implementations.Discovery;
 using Jellyfin.Custom.Database;
+using MediaBrowser.Controller.Discovery;
 using Microsoft.Data.Sqlite;
 using Microsoft.EntityFrameworkCore;
 using Xunit;
@@ -84,6 +85,45 @@ public sealed class UserListStoreTests : IAsyncLifetime, IDisposable
         Assert.Equal(new[] { 12 }, (await _store.GetListedTmdbIdsAsync(Ct)).Order());
         await using var context = new CustomDbContext(_options);
         Assert.False(await context.UserLists.AnyAsync(l => l.UserId.Equals(gone), Ct));
+    }
+
+    [Fact]
+    public async Task SameTmdbId_MovieAndSeries_DoNotCollide()
+    {
+        var user = Guid.NewGuid();
+        var saved = await _store.GetDefaultListAsync(user, Ct);
+
+        // Saved holds both types; a film and a show with one TMDB id are two entries.
+        Assert.True(await _store.AddFilmAsync(user, saved.Id, 42, "tt42", Ct));
+        Assert.True(await _store.AddFilmAsync(user, saved.Id, 42, DiscoveryMediaType.Series, null, Ct));
+        var both = (await _store.GetListAsync(user, saved.Id, Ct))!;
+        Assert.Equal(
+            new[] { DiscoveryMediaType.Movie, DiscoveryMediaType.Series },
+            both.Films.Select(f => f.Type).Order());
+        Assert.True(both.Contains(42));
+        Assert.True(both.Contains(42, DiscoveryMediaType.Series));
+        Assert.Equal(
+            new[] { DiscoveryMediaType.Movie, DiscoveryMediaType.Series },
+            both.ToDiscoveryList().Films.Select(f => f.Type).Order());
+
+        // Toggling the show leaves the film.
+        Assert.False(await _store.ToggleAsync(user, saved.Id, 42, DiscoveryMediaType.Series, null, Ct));
+        var filmOnly = (await _store.GetListAsync(user, saved.Id, Ct))!;
+        Assert.Equal(new UserListFilm(42, "tt42", filmOnly.Films[0].AddedAt), Assert.Single(filmOnly.Films));
+        Assert.False(filmOnly.Contains(42, DiscoveryMediaType.Series));
+        Assert.True(await _store.ToggleAsync(user, saved.Id, 42, DiscoveryMediaType.Series, null, Ct));
+
+        // Listed ids are per type; without a type they are the films'.
+        Assert.True(await _store.AddFilmAsync(user, saved.Id, 43, DiscoveryMediaType.Series, null, Ct));
+        Assert.Equal(new[] { 42 }, (await _store.GetListedTmdbIdsAsync(Ct)).Order());
+        Assert.Equal(new[] { 42, 43 }, (await _store.GetListedTmdbIdsAsync(DiscoveryMediaType.Series, Ct)).Order());
+
+        // Removing the film leaves the show.
+        Assert.True(await _store.RemoveFilmAsync(user, saved.Id, 42, Ct));
+        Assert.Empty(await _store.GetListedTmdbIdsAsync(Ct));
+        Assert.Equal(new[] { 42, 43 }, (await _store.GetListedTmdbIdsAsync(DiscoveryMediaType.Series, Ct)).Order());
+        Assert.True(await _store.RemoveFilmAsync(user, saved.Id, 43, DiscoveryMediaType.Series, Ct));
+        Assert.Equal(new[] { 42 }, (await _store.GetListedTmdbIdsAsync(DiscoveryMediaType.Series, Ct)).Order());
     }
 
     private sealed class Factory(DbContextOptions<CustomDbContext> options) : IDbContextFactory<CustomDbContext>

@@ -69,7 +69,9 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
         {
             ArgumentNullException.ThrowIfNull(list);
 
-            var filmsJson = JsonSerializer.Serialize(list.Films, JsonDefaults.Options);
+            // The films as [{tmdbId, imdbId}], as before types: their type is the list's.
+            var filmsJson = JsonSerializer.Serialize(list.Films.Select(f => new StoredFilm(f.TmdbId, f.ImdbId)), JsonDefaults.Options);
+            var itemType = ToStored(list.ItemType);
             var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
             await using (context.ConfigureAwait(false))
             {
@@ -78,7 +80,7 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
                     .ConfigureAwait(false);
                 if (entity is null)
                 {
-                    entity = new CustomDiscoveryList { Id = list.Id, Title = list.Title, Source = list.Source, FilmsJson = filmsJson, Group = list.Group };
+                    entity = new CustomDiscoveryList { Id = list.Id, Title = list.Title, Source = list.Source, FilmsJson = filmsJson, Group = list.Group, ItemType = itemType };
                     context.DiscoveryLists.Add(entity);
                 }
                 else
@@ -87,6 +89,7 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
                     entity.Source = list.Source;
                     entity.FilmsJson = filmsJson;
                     entity.Group = list.Group;
+                    entity.ItemType = itemType;
                 }
 
                 entity.DateModified = DateTime.UtcNow;
@@ -122,7 +125,11 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task MarkShownAsync(IEnumerable<int> tmdbIds, DateOnly day, CancellationToken cancellationToken)
+    public Task MarkShownAsync(IEnumerable<int> tmdbIds, DateOnly day, CancellationToken cancellationToken)
+        => MarkShownAsync(tmdbIds, DiscoveryMediaType.Movie, day, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task MarkShownAsync(IEnumerable<int> tmdbIds, DiscoveryMediaType type, DateOnly day, CancellationToken cancellationToken)
     {
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
@@ -130,6 +137,7 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
             ArgumentNullException.ThrowIfNull(tmdbIds);
 
             var ids = tmdbIds.Distinct().ToList();
+            var mediaType = ToStored(type);
             if (ids.Count == 0)
             {
                 return;
@@ -139,7 +147,7 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
             await using (context.ConfigureAwait(false))
             {
                 var existing = (await context.DiscoveryShown
-                    .Where(s => ids.Contains(s.TmdbId))
+                    .Where(s => s.MediaType == mediaType && ids.Contains(s.TmdbId))
                     .ToListAsync(cancellationToken)
                     .ConfigureAwait(false))
                     .ToDictionary(s => s.TmdbId);
@@ -152,7 +160,7 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
                     }
                     else
                     {
-                        context.DiscoveryShown.Add(new CustomDiscoveryShown { TmdbId = id, FirstShown = day, LastShown = day });
+                        context.DiscoveryShown.Add(new CustomDiscoveryShown { TmdbId = id, MediaType = mediaType, FirstShown = day, LastShown = day });
                     }
                 }
 
@@ -166,13 +174,22 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyDictionary<int, DiscoveryShown>> GetShownAsync(CancellationToken cancellationToken)
+    public Task<IReadOnlyDictionary<int, DiscoveryShown>> GetShownAsync(CancellationToken cancellationToken)
+        => GetShownAsync(DiscoveryMediaType.Movie, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyDictionary<int, DiscoveryShown>> GetShownAsync(DiscoveryMediaType type, CancellationToken cancellationToken)
     {
+        var mediaType = ToStored(type);
         var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using (context.ConfigureAwait(false))
         {
-            var rows = await context.DiscoveryShown.AsNoTracking().ToListAsync(cancellationToken).ConfigureAwait(false);
-            return rows.ToDictionary(r => r.TmdbId, r => new DiscoveryShown(r.TmdbId, r.FirstShown, r.LastShown));
+            var rows = await context.DiscoveryShown
+                .AsNoTracking()
+                .Where(s => s.MediaType == mediaType)
+                .ToListAsync(cancellationToken)
+                .ConfigureAwait(false);
+            return rows.ToDictionary(r => r.TmdbId, r => new DiscoveryShown(r.TmdbId, r.FirstShown, r.LastShown, type));
         }
     }
 
@@ -217,7 +234,7 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
 
                 await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
 
-                // The day is picked afresh: every user's saved picks of it go.
+                // The day is picked afresh: every user's saved picks of it go, of every type (the salt is shared).
                 await context.DiscoveryPickSnapshots
                     .Where(s => s.Day == day)
                     .ExecuteDeleteAsync(cancellationToken)
@@ -238,14 +255,19 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<string>?> GetPickSnapshotAsync(Guid userId, DateOnly day, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<string>?> GetPickSnapshotAsync(Guid userId, DateOnly day, CancellationToken cancellationToken)
+        => GetPickSnapshotAsync(userId, day, DiscoveryMediaType.Movie, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>?> GetPickSnapshotAsync(Guid userId, DateOnly day, DiscoveryMediaType type, CancellationToken cancellationToken)
     {
+        var mediaType = ToStored(type);
         var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using (context.ConfigureAwait(false))
         {
             var json = await context.DiscoveryPickSnapshots
                 .AsNoTracking()
-                .Where(s => s.UserId.Equals(userId) && s.Day == day)
+                .Where(s => s.UserId.Equals(userId) && s.Day == day && s.MediaType == mediaType)
                 .Select(s => s.ListIdsJson)
                 .FirstOrDefaultAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -254,10 +276,15 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<string>> AddPickSnapshotAsync(Guid userId, DateOnly day, string? salt, IReadOnlyList<string> listIds, CancellationToken cancellationToken)
+    public Task<IReadOnlyList<string>> AddPickSnapshotAsync(Guid userId, DateOnly day, string? salt, IReadOnlyList<string> listIds, CancellationToken cancellationToken)
+        => AddPickSnapshotAsync(userId, day, DiscoveryMediaType.Movie, salt, listIds, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlyList<string>> AddPickSnapshotAsync(Guid userId, DateOnly day, DiscoveryMediaType type, string? salt, IReadOnlyList<string> listIds, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(listIds);
 
+        var mediaType = ToStored(type);
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -278,7 +305,7 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
 
                 var existing = await context.DiscoveryPickSnapshots
                     .AsNoTracking()
-                    .Where(s => s.UserId.Equals(userId) && s.Day == day)
+                    .Where(s => s.UserId.Equals(userId) && s.Day == day && s.MediaType == mediaType)
                     .Select(s => s.ListIdsJson)
                     .FirstOrDefaultAsync(cancellationToken)
                     .ConfigureAwait(false);
@@ -291,6 +318,7 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
                 {
                     UserId = userId,
                     Day = day,
+                    MediaType = mediaType,
                     ListIdsJson = JsonSerializer.Serialize(listIds, JsonDefaults.Options)
                 });
                 await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -311,10 +339,15 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<bool> RemovePickSnapshotAsync(Guid userId, DateOnly day, IReadOnlyList<string> listIds, CancellationToken cancellationToken)
+    public Task<bool> RemovePickSnapshotAsync(Guid userId, DateOnly day, IReadOnlyList<string> listIds, CancellationToken cancellationToken)
+        => RemovePickSnapshotAsync(userId, day, DiscoveryMediaType.Movie, listIds, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<bool> RemovePickSnapshotAsync(Guid userId, DateOnly day, DiscoveryMediaType type, IReadOnlyList<string> listIds, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(listIds);
 
+        var mediaType = ToStored(type);
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -323,7 +356,7 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
             {
                 // Under the write lock, so picks saved by another read meanwhile are seen and kept.
                 var entity = await context.DiscoveryPickSnapshots
-                    .FirstOrDefaultAsync(s => s.UserId.Equals(userId) && s.Day == day, cancellationToken)
+                    .FirstOrDefaultAsync(s => s.UserId.Equals(userId) && s.Day == day && s.MediaType == mediaType, cancellationToken)
                     .ConfigureAwait(false);
                 if (entity is null || !ToListIds(entity.ListIdsJson).SequenceEqual(listIds, StringComparer.Ordinal))
                 {
@@ -346,7 +379,15 @@ public sealed class DiscoveryStore : IDiscoveryStore, IDisposable
 
     private static DiscoveryList ToList(CustomDiscoveryList entity)
     {
-        var films = JsonSerializer.Deserialize<List<DiscoveryFilmRef>>(entity.FilmsJson, JsonDefaults.Options) ?? [];
-        return new DiscoveryList(entity.Id, entity.Title, entity.Source, films, entity.Group);
+        var type = DiscoveryMediaTypes.FromStored(entity.ItemType);
+        var films = (JsonSerializer.Deserialize<List<StoredFilm>>(entity.FilmsJson, JsonDefaults.Options) ?? [])
+            .Select(f => new DiscoveryFilmRef(f.TmdbId, f.ImdbId, type))
+            .ToList();
+        return new DiscoveryList(entity.Id, entity.Title, entity.Source, films, entity.Group, type);
     }
+
+    private static string ToStored(DiscoveryMediaType type) => DiscoveryMediaTypes.ToStored(type);
+
+    // A list's film as stored in FilmsJson.
+    private sealed record StoredFilm(int TmdbId, string? ImdbId);
 }

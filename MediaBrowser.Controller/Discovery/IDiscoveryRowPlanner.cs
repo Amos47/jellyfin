@@ -20,7 +20,7 @@ public interface IDiscoveryRowPlanner
     /// <see cref="DiscoveryPickRules.MinReadyFilms"/> films playable for the user (see <see cref="CountReadyFilms"/>).
     /// The user's first full pick of the day (one that fills <paramref name="maxRows"/>, or, when the stored lists can
     /// give fewer rows, one per group plus one per ungrouped list, holds all of them) is saved in full
-    /// (<see cref="IDiscoveryStore.AddPickSnapshotAsync"/>) and read back for the rest of the day, so lists becoming
+    /// (<see cref="IDiscoveryStore.AddPickSnapshotAsync(Guid, DateOnly, string?, IReadOnlyList{string}, CancellationToken)"/>) and read back for the rest of the day, so lists becoming
     /// ready (or unready) later don't change it; a smaller <paramref name="maxRows"/> takes a prefix, and saved lists
     /// that were deleted since are left out. A saved pick whose lists were all deleted is dropped and picked again. A
     /// smaller pick is not saved and is worked out again on later reads, through a readiness cache kept per user, day

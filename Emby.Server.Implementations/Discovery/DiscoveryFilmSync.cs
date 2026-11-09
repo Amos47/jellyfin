@@ -75,9 +75,10 @@ public sealed class DiscoveryFilmSync : IDiscoveryFilmSync, IDisposable
         {
             var lists = await _store.GetListsAsync(cancellationToken).ConfigureAwait(false);
 
-            // TMDB id -> IMDb id (the first one any list gives).
+            // TMDB id -> IMDb id (the first one any list gives). Only movie lists have virtual films; the user lists and
+            // requests read below are the movies' too.
             var wanted = new Dictionary<int, string?>();
-            foreach (var film in lists.SelectMany(l => l.Films))
+            foreach (var film in lists.Where(l => l.ItemType == DiscoveryMediaType.Movie).SelectMany(l => l.Films))
             {
                 if (!wanted.TryGetValue(film.TmdbId, out var imdbId) || string.IsNullOrEmpty(imdbId))
                 {

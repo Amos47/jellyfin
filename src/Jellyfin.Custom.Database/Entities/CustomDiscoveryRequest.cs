@@ -14,6 +14,12 @@ public class CustomDiscoveryRequest
     public int TmdbId { get; set; }
 
     /// <summary>
+    /// Gets or sets the media type of the TMDB id: <c>Movie</c> or <c>Series</c>. Part of the key; rows from before
+    /// shows are <c>Movie</c>.
+    /// </summary>
+    public string MediaType { get; set; } = CustomMediaTypes.Movie;
+
+    /// <summary>
     /// Gets or sets the state: requested, downloading, failed or done.
     /// </summary>
     public required string State { get; set; }

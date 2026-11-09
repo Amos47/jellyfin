@@ -26,12 +26,12 @@ public static class DiscoveryRequestDone
         DiscoveryRequest? request,
         CancellationToken cancellationToken)
     {
-        if (request is not { IsActive: true } || !IsOwned(filmSync, request.TmdbId))
+        if (request is not { IsActive: true } || !IsOwned(filmSync, request.TmdbId, request.Type))
         {
             return request;
         }
 
-        return await store.SetStateAsync(request.TmdbId, DiscoveryRequest.StateDone, cancellationToken).ConfigureAwait(false) ?? request;
+        return await store.SetStateAsync(request.TmdbId, request.Type, DiscoveryRequest.StateDone, cancellationToken).ConfigureAwait(false) ?? request;
     }
 
     /// <summary>
@@ -64,8 +64,24 @@ public static class DiscoveryRequestDone
     /// <param name="tmdbId">The TMDB id.</param>
     /// <returns>True if a library has the film.</returns>
     public static bool IsOwned(IDiscoveryFilmSync filmSync, int tmdbId)
+        => IsOwned(filmSync, tmdbId, DiscoveryMediaType.Movie);
+
+    /// <summary>
+    /// Gets whether a title of a type is in a library. Only films are matched so far: a show is never owned here, so
+    /// a show's request is never marked done by a film with the same TMDB id.
+    /// </summary>
+    /// <param name="filmSync">The film sync.</param>
+    /// <param name="tmdbId">The TMDB id.</param>
+    /// <param name="type">The media type.</param>
+    /// <returns>True if a library has the title.</returns>
+    public static bool IsOwned(IDiscoveryFilmSync filmSync, int tmdbId, DiscoveryMediaType type)
     {
         System.ArgumentNullException.ThrowIfNull(filmSync);
+
+        if (type != DiscoveryMediaType.Movie)
+        {
+            return false;
+        }
 
         var imdbId = filmSync.FindFilm(tmdbId)?.GetProviderId(MetadataProvider.Imdb);
         return filmSync.FindOwned(tmdbId, string.IsNullOrEmpty(imdbId) ? null : imdbId) is not null;

@@ -19,6 +19,12 @@ public class CustomDiscoveryPickSnapshot
     public DateOnly Day { get; set; }
 
     /// <summary>
+    /// Gets or sets the media type of the picked lists: <c>Movie</c> or <c>Series</c>. Part of the key; picks from
+    /// before shows are <c>Movie</c>.
+    /// </summary>
+    public string MediaType { get; set; } = CustomMediaTypes.Movie;
+
+    /// <summary>
     /// Gets or sets the picked list ids in display order, as a JSON array of strings.
     /// </summary>
     public required string ListIdsJson { get; set; }

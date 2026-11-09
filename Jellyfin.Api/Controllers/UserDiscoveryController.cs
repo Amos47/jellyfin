@@ -232,15 +232,21 @@ public class UserDiscoveryController : BaseJellyfinApiController
     /// <param name="listId">The list id.</param>
     /// <param name="tmdbId">The TMDB id of the film.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
+    /// <param name="type">Optional: the media type of the TMDB id, Movie (the default) or Series.</param>
     /// <response code="200">Film added; the updated list returned.</response>
     /// <response code="404">The user has no list with that id, the server doesn't know the film, or the caller has no user.</response>
     /// <returns>The updated list.</returns>
     [HttpPost("UserLists/{listId}/Films/{tmdbId}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UserListDto>> AddUserListFilm([FromRoute, Required] Guid listId, [FromRoute, Required] int tmdbId, CancellationToken cancellationToken)
+    public async Task<ActionResult<UserListDto>> AddUserListFilm(
+        [FromRoute, Required] Guid listId,
+        [FromRoute, Required] int tmdbId,
+        CancellationToken cancellationToken,
+        [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
-        if (GetUser() is not { } user || tmdbId <= 0)
+        // Only films are known to the server so far: a show it doesn't know can't be added.
+        if (GetUser() is not { } user || tmdbId <= 0 || type != DiscoveryMediaType.Movie)
         {
             return NotFound();
         }
@@ -282,16 +288,21 @@ public class UserDiscoveryController : BaseJellyfinApiController
     /// <param name="listId">The list id.</param>
     /// <param name="tmdbId">The TMDB id of the film.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
+    /// <param name="type">Optional: the media type of the TMDB id, Movie (the default) or Series.</param>
     /// <response code="200">Film removed; the updated list returned.</response>
     /// <response code="404">The user has no list with that id, or the caller has no user.</response>
     /// <returns>The updated list.</returns>
     [HttpDelete("UserLists/{listId}/Films/{tmdbId}")]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status404NotFound)]
-    public async Task<ActionResult<UserListDto>> RemoveUserListFilm([FromRoute, Required] Guid listId, [FromRoute, Required] int tmdbId, CancellationToken cancellationToken)
+    public async Task<ActionResult<UserListDto>> RemoveUserListFilm(
+        [FromRoute, Required] Guid listId,
+        [FromRoute, Required] int tmdbId,
+        CancellationToken cancellationToken,
+        [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
         if (GetUser() is not { } user
-            || !await _userLists.RemoveFilmAsync(user.Id, listId, tmdbId, CancellationToken.None).ConfigureAwait(false))
+            || !await _userLists.RemoveFilmAsync(user.Id, listId, tmdbId, type, CancellationToken.None).ConfigureAwait(false))
         {
             return NotFound();
         }
@@ -305,7 +316,7 @@ public class UserDiscoveryController : BaseJellyfinApiController
             list.Name,
             list.IsDefault,
             list.PageListId,
-            list.Films.Select(f => new UserListFilmDto(f.TmdbId, f.ImdbId, f.AddedAt)).ToArray());
+            list.Films.Select(f => new UserListFilmDto(f.TmdbId, f.ImdbId, f.AddedAt, f.Type)).ToArray());
 
     private static Guid? FirstWith(IEnumerable<BaseItem> films, ImageType type)
         => films.FirstOrDefault(f => f.HasImage(type))?.Id;

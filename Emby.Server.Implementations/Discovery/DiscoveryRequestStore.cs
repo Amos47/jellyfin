@@ -37,15 +37,20 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
     public void Dispose() => _writeLock.Dispose();
 
     /// <inheritdoc />
-    public async Task<DiscoveryRequest?> GetAsync(int tmdbId, CancellationToken cancellationToken)
+    public Task<DiscoveryRequest?> GetAsync(int tmdbId, CancellationToken cancellationToken)
+        => GetAsync(tmdbId, DiscoveryMediaType.Movie, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<DiscoveryRequest?> GetAsync(int tmdbId, DiscoveryMediaType type, CancellationToken cancellationToken)
     {
+        var mediaType = DiscoveryMediaTypes.ToStored(type);
         var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using (context.ConfigureAwait(false))
         {
             var entity = await context.DiscoveryRequests
                 .AsNoTracking()
                 .Include(r => r.Users)
-                .FirstOrDefaultAsync(r => r.TmdbId == tmdbId, cancellationToken)
+                .FirstOrDefaultAsync(r => r.TmdbId == tmdbId && r.MediaType == mediaType, cancellationToken)
                 .ConfigureAwait(false);
             return entity is null ? null : ToModel(entity);
         }
@@ -67,14 +72,20 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
             return entities
                 .OrderByDescending(r => r.UpdatedAt)
                 .ThenBy(r => r.TmdbId)
+                .ThenBy(r => r.MediaType, StringComparer.Ordinal)
                 .Select(ToModel)
                 .ToList();
         }
     }
 
     /// <inheritdoc />
-    public async Task<DiscoveryRequest> RequestAsync(int tmdbId, Guid userId, CancellationToken cancellationToken)
+    public Task<DiscoveryRequest> RequestAsync(int tmdbId, Guid userId, CancellationToken cancellationToken)
+        => RequestAsync(tmdbId, DiscoveryMediaType.Movie, userId, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<DiscoveryRequest> RequestAsync(int tmdbId, DiscoveryMediaType type, Guid userId, CancellationToken cancellationToken)
     {
+        var mediaType = DiscoveryMediaTypes.ToStored(type);
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -83,12 +94,12 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
             {
                 var entity = await context.DiscoveryRequests
                     .Include(r => r.Users)
-                    .FirstOrDefaultAsync(r => r.TmdbId == tmdbId, cancellationToken)
+                    .FirstOrDefaultAsync(r => r.TmdbId == tmdbId && r.MediaType == mediaType, cancellationToken)
                     .ConfigureAwait(false);
                 var now = DateTime.UtcNow;
                 if (entity is null)
                 {
-                    entity = new CustomDiscoveryRequest { TmdbId = tmdbId, State = DiscoveryRequest.StateRequested, UpdatedAt = now };
+                    entity = new CustomDiscoveryRequest { TmdbId = tmdbId, MediaType = mediaType, State = DiscoveryRequest.StateRequested, UpdatedAt = now };
                     context.DiscoveryRequests.Add(entity);
                 }
                 else if (entity.State is DiscoveryRequest.StateFailed or DiscoveryRequest.StateDone)
@@ -100,7 +111,7 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
 
                 if (!entity.Users.Any(u => u.UserId.Equals(userId)))
                 {
-                    entity.Users.Add(new CustomDiscoveryRequestUser { TmdbId = tmdbId, UserId = userId });
+                    entity.Users.Add(new CustomDiscoveryRequestUser { TmdbId = tmdbId, MediaType = mediaType, UserId = userId });
                 }
 
                 await context.SaveChangesAsync(cancellationToken).ConfigureAwait(false);
@@ -114,13 +125,18 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<DiscoveryRequest?> SetStateAsync(int tmdbId, string state, CancellationToken cancellationToken)
+    public Task<DiscoveryRequest?> SetStateAsync(int tmdbId, string state, CancellationToken cancellationToken)
+        => SetStateAsync(tmdbId, DiscoveryMediaType.Movie, state, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<DiscoveryRequest?> SetStateAsync(int tmdbId, DiscoveryMediaType type, string state, CancellationToken cancellationToken)
     {
         if (!DiscoveryRequest.IsState(state))
         {
             throw new ArgumentException("Unknown request state: " + state, nameof(state));
         }
 
+        var mediaType = DiscoveryMediaTypes.ToStored(type);
         await _writeLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
@@ -129,7 +145,7 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
             {
                 var entity = await context.DiscoveryRequests
                     .Include(r => r.Users)
-                    .FirstOrDefaultAsync(r => r.TmdbId == tmdbId, cancellationToken)
+                    .FirstOrDefaultAsync(r => r.TmdbId == tmdbId && r.MediaType == mediaType, cancellationToken)
                     .ConfigureAwait(false);
                 if (entity is null)
                 {
@@ -156,14 +172,19 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlySet<int>> GetActiveTmdbIdsAsync(CancellationToken cancellationToken)
+    public Task<IReadOnlySet<int>> GetActiveTmdbIdsAsync(CancellationToken cancellationToken)
+        => GetActiveTmdbIdsAsync(DiscoveryMediaType.Movie, cancellationToken);
+
+    /// <inheritdoc />
+    public async Task<IReadOnlySet<int>> GetActiveTmdbIdsAsync(DiscoveryMediaType type, CancellationToken cancellationToken)
     {
+        var mediaType = DiscoveryMediaTypes.ToStored(type);
         var context = await _dbFactory.CreateDbContextAsync(cancellationToken).ConfigureAwait(false);
         await using (context.ConfigureAwait(false))
         {
             var ids = await context.DiscoveryRequests
                 .AsNoTracking()
-                .Where(r => r.State != DiscoveryRequest.StateDone)
+                .Where(r => r.MediaType == mediaType && r.State != DiscoveryRequest.StateDone)
                 .Select(r => r.TmdbId)
                 .ToListAsync(cancellationToken)
                 .ConfigureAwait(false);
@@ -249,5 +270,5 @@ public sealed class DiscoveryRequestStore : IDiscoveryRequestStore, IDisposable
     }
 
     private static DiscoveryRequest ToModel(CustomDiscoveryRequest entity)
-        => new(entity.TmdbId, entity.State, entity.UpdatedAt, entity.Users.Select(u => u.UserId).ToArray());
+        => new(entity.TmdbId, entity.State, entity.UpdatedAt, entity.Users.Select(u => u.UserId).ToArray(), DiscoveryMediaTypes.FromStored(entity.MediaType));
 }
