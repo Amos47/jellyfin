@@ -82,6 +82,14 @@ public sealed class DiscoveryMediaTypeTests : IClassFixture<JellyfinApplicationF
             Assert.Equal("downloading", (string?)request["State"]);
             Assert.Null(await GetRequestAsync(client, 7101, "Series"));
 
+            // Untyped, the list is the movies' only: an app that knows no types never sees a show's request.
+            await Requests.RequestAsync(7102, DiscoveryMediaType.Series, userId, Ct);
+            var untyped = await GetAsync<JsonArray>(client, "Discovery/Requests");
+            Assert.Contains(untyped, r => (int)r!["TmdbId"]! == 7101);
+            Assert.All(untyped, r => Assert.Equal("Movie", (string?)r!["Type"]));
+            Assert.NotNull(await GetRequestAsync(client, 7102, "Series"));
+            await Requests.SetStateAsync(7102, DiscoveryMediaType.Series, DiscoveryRequest.StateDone, Ct);
+
             // User lists: no type adds and removes the movie; the server knows no show 7101 yet.
             var saved = (string)(await GetSavedAsync(client))["Id"]!;
             var added = await SendAsync<JsonObject>(client, HttpMethod.Post, $"Discovery/UserLists/{saved}/Films/7101");
@@ -110,6 +118,18 @@ public sealed class DiscoveryMediaTypeTests : IClassFixture<JellyfinApplicationF
             {
                 Assert.Equal(HttpStatusCode.BadRequest, bogusList.StatusCode);
             }
+
+            // A number that names no type is refused too, not stored.
+            using (var numericList = await client.PutAsJsonAsync(
+                "Discovery/Lists/mt-bogus",
+                new { Title = "Bogus", Source = "tests", Films = new[] { new { TmdbId = 1 } }, ItemType = 7 },
+                JsonDefaults.Options,
+                Ct))
+            {
+                Assert.Equal(HttpStatusCode.BadRequest, numericList.StatusCode);
+            }
+
+            Assert.DoesNotContain(await GetAsync<JsonArray>(client, "Discovery/Lists"), l => (string?)l!["Id"] == "mt-bogus");
         }
         finally
         {
@@ -237,7 +257,7 @@ public sealed class DiscoveryMediaTypeTests : IClassFixture<JellyfinApplicationF
         => (await GetAsync<JsonArray>(client, "Discovery/UserLists")).Single(l => (bool)l!["IsDefault"]!)!.AsObject();
 
     private static async Task<JsonObject?> GetRequestAsync(HttpClient client, int tmdbId, string type)
-        => (await GetAsync<JsonArray>(client, "Discovery/Requests"))
+        => (await GetAsync<JsonArray>(client, "Discovery/Requests?type=" + type))
             .SingleOrDefault(r => (int)r!["TmdbId"]! == tmdbId && (string?)r["Type"] == type)?.AsObject();
 
     private static async Task<HttpStatusCode> PutRequestAsync(HttpClient client, string url, string state)

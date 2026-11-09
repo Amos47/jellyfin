@@ -237,7 +237,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
     /// <param name="list">The list. Its <c>ItemType</c> (default Movie) is the type of all its films.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <response code="204">List saved.</response>
-    /// <response code="400">The id or the list is invalid (including a group over 100 characters).</response>
+    /// <response code="400">The id or the list is invalid (including a group over 100 characters or an unknown item type).</response>
     /// <returns>A <see cref="NoContentResult"/>.</returns>
     [HttpPut("Lists/{listId}")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]
@@ -274,6 +274,11 @@ public partial class DiscoveryController : BaseJellyfinApiController
         }
 
         var itemType = list.ItemType ?? DiscoveryMediaType.Movie;
+        if (!Enum.IsDefined(itemType))
+        {
+            return BadRequest("The item type must be Movie or Series.");
+        }
+
         var films = new List<DiscoveryFilmRef>(list.Films.Count);
         var seen = new HashSet<int>();
         foreach (var film in list.Films)
@@ -400,12 +405,13 @@ public partial class DiscoveryController : BaseJellyfinApiController
     }
 
     /// <summary>
-    /// Gets the download requests of every type, each with its <c>Type</c>, most recently changed first. Requests whose
+    /// Gets the download requests of one media type (Movie unless <paramref name="type"/> says otherwise), each with
+    /// its <c>Type</c>, most recently changed first: an app that knows no types only ever sees films. Requests whose
     /// title is now in a library are marked done first.
     /// </summary>
     /// <param name="state">Optional: only the requests in this state (requested, downloading, failed or done).</param>
     /// <param name="cancellationToken">The cancellation token.</param>
-    /// <param name="type">Optional: only the requests of this media type (Movie or Series).</param>
+    /// <param name="type">Optional: the media type of the requests, Movie (the default) or Series.</param>
     /// <response code="200">Requests returned.</response>
     /// <response code="400">The state is unknown.</response>
     /// <returns>The requests.</returns>
@@ -415,7 +421,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
     public async Task<ActionResult<DiscoveryRequestDto[]>> GetRequests(
         [FromQuery] string? state,
         CancellationToken cancellationToken,
-        [FromQuery] DiscoveryMediaType? type = null)
+        [FromQuery] DiscoveryMediaType type = DiscoveryMediaType.Movie)
     {
         if (state is not null && !DiscoveryRequest.IsState(state))
         {
@@ -427,7 +433,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
         var current = await DiscoveryRequestDone.CheckAllAsync(_requests, _filmSync, all, cancellationToken).ConfigureAwait(false);
         return Ok(current
             .Where(r => state is null || string.Equals(r.State, state, StringComparison.Ordinal))
-            .Where(r => type is null || r.Type == type)
+            .Where(r => r.Type == type)
             .Select(r => new DiscoveryRequestDto(r.TmdbId, r.State, r.UpdatedAt, r.UserIds, r.Type))
             .ToArray());
     }

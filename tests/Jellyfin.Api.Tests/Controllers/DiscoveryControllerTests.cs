@@ -123,6 +123,18 @@ public class DiscoveryControllerTests
     }
 
     [Fact]
+    public async Task SetList_UndefinedItemType_BadRequest_NothingStored()
+    {
+        var result = await _subject.SetList(
+            "list",
+            new DiscoveryListUpdateDto("List", "tests", [new DiscoveryFilmDto(7, null)], ItemType: (DiscoveryMediaType)7),
+            CancellationToken.None);
+
+        Assert.IsType<BadRequestObjectResult>(result);
+        _store.Verify(s => s.SetListAsync(It.IsAny<DiscoveryList>(), It.IsAny<CancellationToken>()), Times.Never);
+    }
+
+    [Fact]
     public async Task GetPicks_OneUsersLayoutFails_SkipsThatUser()
     {
         var broken = new User("broken", "Default", "Default");

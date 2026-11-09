@@ -181,6 +181,30 @@ public sealed class CustomDbMediaTypeMigrationTests : IDisposable
         Assert.Equal(2L, await CountAsync("CustomDiscoveryRequestUsers"));
     }
 
+    [Fact]
+    public async Task MigrationDown_DropsShowLists_KeepsMovieLists()
+    {
+        await using (var context = new CustomDbContext(_options))
+        {
+            await context.Database.MigrateAsync(Ct);
+        }
+
+        using (var store = new DiscoveryStore(new Factory(_options)))
+        {
+            await store.SetListAsync(new DiscoveryList("films", "Films", "app", [new(30, null)]), Ct);
+            await store.SetListAsync(new DiscoveryList("shows", "Shows", "app", [new(30, null)], ItemType: DiscoveryMediaType.Series), Ct);
+        }
+
+        await using (var context = new CustomDbContext(_options))
+        {
+            await context.GetService<IMigrator>().MigrateAsync(PreviousMigration, cancellationToken: Ct);
+        }
+
+        // After a rollback, a show list left behind would read as a movie list.
+        Assert.Equal(1L, await CountAsync("CustomDiscoveryLists"));
+        Assert.Equal(1L, await ScalarAsync("SELECT COUNT(*) FROM CustomDiscoveryLists WHERE Id = 'films'"));
+    }
+
     private static string Text(Guid id) => id.ToString().ToUpperInvariant();
 
     [SuppressMessage("Security", "CA2100:Review SQL queries for security vulnerabilities", Justification = "Test-only SQL built from the test's own constants.")]

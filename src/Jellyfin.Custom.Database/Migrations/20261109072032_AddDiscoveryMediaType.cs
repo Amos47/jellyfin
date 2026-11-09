@@ -100,6 +100,8 @@ namespace Jellyfin.Custom.Database.Migrations
             // Back to one row per TMDB id: only the movies' rows are kept.
             migrationBuilder.Sql("PRAGMA foreign_keys = 0;", suppressTransaction: true);
 
+            // Show lists go: without the column they would read as movie lists.
+            migrationBuilder.Sql("DELETE FROM \"CustomDiscoveryLists\" WHERE \"ItemType\" <> 'Movie';");
             migrationBuilder.Sql("ALTER TABLE \"CustomDiscoveryLists\" DROP COLUMN \"ItemType\";");
 
             RebuildDown(
