@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 namespace MediaBrowser.Controller.Discovery;
 
 /// <summary>
-/// Fork: stores discovery lists and the log of films shown, in the fork database.
+/// Fork: stores discovery lists, the log of films shown, the re-pick salts and the saved day picks, in the fork database.
 /// </summary>
 public interface IDiscoveryStore
 {
@@ -66,12 +66,35 @@ public interface IDiscoveryStore
     Task<string?> GetPickSaltAsync(DateOnly day, CancellationToken cancellationToken);
 
     /// <summary>
-    /// Sets the re-pick salt of a day, replacing the one it had. Salts of days more than a week before the server's
-    /// local today are pruned.
+    /// Sets the re-pick salt of a day, replacing the one it had, and removes every user's saved picks of that day
+    /// (<see cref="GetPickSnapshotAsync"/>) so they are picked afresh. Salts of days more than a week before the
+    /// server's local today are pruned.
     /// </summary>
     /// <param name="day">The server's local date.</param>
     /// <param name="salt">The salt.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>A task.</returns>
     Task SetPickSaltAsync(DateOnly day, string salt, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Gets a user's saved picks of a day.
+    /// </summary>
+    /// <param name="userId">The user id.</param>
+    /// <param name="day">The server's local date.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The picked list ids in display order, or null if none were saved.</returns>
+    Task<IReadOnlyList<string>?> GetPickSnapshotAsync(Guid userId, DateOnly day, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// Saves a user's picks of a day, unless picks are already saved for that user and day (the first save wins) or
+    /// the day's re-pick salt is no longer <paramref name="salt"/> (a re-pick came in while they were worked out).
+    /// Saved picks of days more than a week before the server's local today are pruned.
+    /// </summary>
+    /// <param name="userId">The user id.</param>
+    /// <param name="day">The server's local date.</param>
+    /// <param name="salt">The re-pick salt the picks were made with, or null for none.</param>
+    /// <param name="listIds">The picked list ids, in display order.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <returns>The picks that hold: the saved ones if some were already saved, else <paramref name="listIds"/>.</returns>
+    Task<IReadOnlyList<string>> AddPickSnapshotAsync(Guid userId, DateOnly day, string? salt, IReadOnlyList<string> listIds, CancellationToken cancellationToken);
 }

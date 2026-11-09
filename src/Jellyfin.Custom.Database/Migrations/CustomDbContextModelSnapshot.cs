@@ -64,6 +64,25 @@ namespace Jellyfin.Custom.Database.Migrations
                     b.ToTable("CustomDiscoveryPickSalts", (string)null);
                 });
 
+            modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomDiscoveryPickSnapshot", b =>
+                {
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateOnly>("Day")
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("ListIdsJson")
+                        .IsRequired()
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("UserId", "Day");
+
+                    b.HasIndex("Day");
+
+                    b.ToTable("CustomDiscoveryPickSnapshots", (string)null);
+                });
+
             modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomDiscoveryShown", b =>
                 {
                     b.Property<int>("TmdbId")

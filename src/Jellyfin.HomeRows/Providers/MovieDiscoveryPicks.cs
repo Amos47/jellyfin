@@ -9,8 +9,8 @@ using MediaBrowser.Controller.Discovery;
 namespace Jellyfin.HomeRows.Providers;
 
 /// <summary>
-/// Fork: the discovery lists a user's Movie discovery rows pick on a day, with each row's <c>maxRows</c> read the
-/// way <see cref="MovieDiscoveryProvider"/> reads it. Picking itself is left to <see cref="IDiscoveryRowPlanner"/>.
+/// Fork: the discovery lists a user's Movie discovery rows pick on a day, with each row's <c>maxRows</c> and readiness
+/// rules read the way <see cref="MovieDiscoveryProvider"/> reads them. Picking itself is left to <see cref="IDiscoveryRowPlanner"/>.
 /// </summary>
 public sealed class MovieDiscoveryPicks : IDiscoveryUserPicks
 {
@@ -46,7 +46,7 @@ public sealed class MovieDiscoveryPicks : IDiscoveryUserPicks
             }
 
             var maxRows = MovieDiscoveryProvider.GetMaxRows(row.Row.Config);
-            foreach (var list in await _planner.GetPickedListsAsync(user, maxRows, day, cancellationToken).ConfigureAwait(false))
+            foreach (var list in await _planner.GetPickedListsAsync(user, maxRows, MovieDiscoveryProvider.GetPickRules(row.Row.Config), day, cancellationToken).ConfigureAwait(false))
             {
                 if (seen.Add(list.Id))
                 {

@@ -55,8 +55,8 @@ public class MovieDiscoveryProviderTests
     private MovieDiscoveryProvider CreateProvider(DiscoveryList[] picked, DiscoveryList[] alsoStored)
     {
         _planner
-            .Setup(p => p.GetPickedListsAsync(_user, It.IsAny<int>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
-            .Returns<User, int, DateOnly, CancellationToken>((_, max, _, _) => Task.FromResult<IReadOnlyList<DiscoveryList>>(picked.Take(max).ToArray()));
+            .Setup(p => p.GetPickedListsAsync(_user, It.IsAny<int>(), It.IsAny<DiscoveryPickRules>(), It.IsAny<DateOnly>(), It.IsAny<CancellationToken>()))
+            .Returns<User, int, DiscoveryPickRules, DateOnly, CancellationToken>((_, max, _, _, _) => Task.FromResult<IReadOnlyList<DiscoveryList>>(picked.Take(max).ToArray()));
         _stored.Clear();
         _stored.AddRange(picked.Concat(alsoStored).OrderBy(l => l.Id, StringComparer.Ordinal));
         _store
@@ -69,7 +69,7 @@ public class MovieDiscoveryProviderTests
     }
 
     private void SetRowItems(DiscoveryList list, params DiscoveryRowItem[] items)
-        => _planner.Setup(p => p.GetRowItems(_user, list)).Returns(items);
+        => _planner.Setup(p => p.GetRowItems(_user, list, It.IsAny<bool>())).Returns(items);
 
     private static DiscoveryList List(string id, params int[] tmdbIds)
         => new(id, "Title of " + id, "tests", tmdbIds.Select(t => new DiscoveryFilmRef(t, null)).ToArray());
@@ -86,7 +86,7 @@ public class MovieDiscoveryProviderTests
 
         Assert.Equal(HomeRowProviderIds.MovieDiscovery, provider.Id);
         Assert.IsAssignableFrom<IExpandingHomeRowProvider>(provider);
-        Assert.Equal(["maxRows", "externalTrailers", "cardStyle"], schema.Settings.Select(s => s.Key));
+        Assert.Equal(["maxRows", "externalTrailers", "requireTrailer", "minReadyFilms", "cardStyle"], schema.Settings.Select(s => s.Key));
         var maxRows = schema.Settings[0];
         Assert.Equal(HomeRowSettingType.Integer, maxRows.Type);
         Assert.Equal(1, maxRows.Minimum);
@@ -95,7 +95,66 @@ public class MovieDiscoveryProviderTests
         var externalTrailers = schema.Settings[1];
         Assert.Equal(HomeRowSettingType.Boolean, externalTrailers.Type);
         Assert.False(externalTrailers.Default!.GetValue<bool>());
-        Assert.Equal("poster", schema.Settings[2].Default!.GetValue<string>());
+        var requireTrailer = schema.Settings[2];
+        Assert.Equal(HomeRowSettingType.Boolean, requireTrailer.Type);
+        Assert.True(requireTrailer.Default!.GetValue<bool>());
+        var minReadyFilms = schema.Settings[3];
+        Assert.Equal(HomeRowSettingType.Integer, minReadyFilms.Type);
+        Assert.Equal(1, minReadyFilms.Minimum);
+        Assert.Equal(20, minReadyFilms.Maximum);
+        Assert.Equal(5, minReadyFilms.Default!.GetValue<int>());
+        Assert.Equal("poster", schema.Settings[4].Default!.GetValue<string>());
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(21)]
+    [InlineData(-3)]
+    public async Task Config_RejectsBadMinReadyFilms(int value)
+    {
+        var schema = await CreateProvider().GetSchemaAsync(Context(), Ct);
+
+        var bad = HomeRowConfigValidator.Validate(schema, new JsonObject { ["minReadyFilms"] = value });
+        var notANumber = HomeRowConfigValidator.Validate(schema, new JsonObject { ["minReadyFilms"] = "five" });
+        var badBool = HomeRowConfigValidator.Validate(schema, new JsonObject { ["requireTrailer"] = "yes" });
+        var good = HomeRowConfigValidator.Validate(schema, new JsonObject { ["minReadyFilms"] = 20, ["requireTrailer"] = false });
+        var missing = HomeRowConfigValidator.Validate(schema, new JsonObject());
+
+        Assert.Single(bad.Errors, e => e.Key == "minReadyFilms");
+        Assert.Single(notANumber.Errors, e => e.Key == "minReadyFilms");
+        Assert.Single(badBool.Errors, e => e.Key == "requireTrailer");
+        Assert.Empty(good.Errors);
+        Assert.Empty(missing.Errors);
+        Assert.Equal(5, missing.Config["minReadyFilms"]!.GetValue<int>());
+        Assert.True(missing.Config["requireTrailer"]!.GetValue<bool>());
+    }
+
+    [Fact]
+    public void Rules_ReadFromConfig_DefaultsAndClamps()
+    {
+        Assert.Equal(DiscoveryPickRules.Default, MovieDiscoveryProvider.GetPickRules(new JsonObject()));
+        Assert.Equal(new DiscoveryPickRules(false, 7), MovieDiscoveryProvider.GetPickRules(new JsonObject { ["requireTrailer"] = false, ["minReadyFilms"] = 7 }));
+        Assert.Equal(new DiscoveryPickRules(true, 20), MovieDiscoveryProvider.GetPickRules(new JsonObject { ["minReadyFilms"] = 99 }));
+        Assert.Equal(new DiscoveryPickRules(true, 1), MovieDiscoveryProvider.GetPickRules(new JsonObject { ["minReadyFilms"] = 0 }));
+        Assert.Equal(DiscoveryPickRules.Default, MovieDiscoveryProvider.GetPickRules(new JsonObject { ["requireTrailer"] = "no", ["minReadyFilms"] = "x" }));
+    }
+
+    [Fact]
+    public async Task SubRowsAndItems_PassTheRowRules()
+    {
+        var a = List("a", 1);
+        var provider = CreateProvider(a);
+        SetRowItems(a, Item(1));
+        var config = new JsonObject { ["maxRows"] = 2, ["requireTrailer"] = false, ["minReadyFilms"] = 3 };
+
+        await provider.GetSubRowsAsync(Context(null), config, Ct);
+        await provider.GetItemsAsync(Context("a"), config, new HomeRowPaging(0, 20), Ct);
+        await provider.GetItemsAsync(Context("a"), new JsonObject(), new HomeRowPaging(0, 20), Ct);
+
+        _planner.Verify(p => p.GetPickedListsAsync(_user, 2, new DiscoveryPickRules(false, 3), _today, It.IsAny<CancellationToken>()));
+        _planner.Verify(p => p.GetRowItems(_user, a, false));
+        _planner.Verify(p => p.GetRowItems(_user, a, true));
+        _planner.Verify(p => p.GetRowItems(_user, a), Times.Never);
     }
 
     [Fact]
@@ -124,7 +183,7 @@ public class MovieDiscoveryProviderTests
 
         Assert.Equal(new[] { "c", "a" }, rows.Select(r => r.Key));
         Assert.Empty(none);
-        _planner.Verify(p => p.GetPickedListsAsync(_user, 2, _today, It.IsAny<CancellationToken>()));
+        _planner.Verify(p => p.GetPickedListsAsync(_user, 2, DiscoveryPickRules.Default, _today, It.IsAny<CancellationToken>()));
     }
 
     [Fact]

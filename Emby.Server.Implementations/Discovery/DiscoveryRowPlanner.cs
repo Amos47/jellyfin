@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Discovery;
 using MediaBrowser.Controller.Entities;
+using MediaBrowser.Model.Entities;
 
 namespace Emby.Server.Implementations.Discovery;
 
@@ -14,6 +15,8 @@ namespace Emby.Server.Implementations.Discovery;
 /// </summary>
 public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
 {
+    private static readonly ExtraType[] _trailerTypes = [ExtraType.Trailer];
+
     private readonly IDiscoveryStore _store;
     private readonly IDiscoveryFilmSync _sync;
 
@@ -29,9 +32,10 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<DiscoveryList>> GetPickedListsAsync(User user, int maxRows, DateOnly day, CancellationToken cancellationToken)
+    public async Task<IReadOnlyList<DiscoveryList>> GetPickedListsAsync(User user, int maxRows, DiscoveryPickRules rules, DateOnly day, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);
+        ArgumentNullException.ThrowIfNull(rules);
 
         if (maxRows <= 0)
         {
@@ -39,24 +43,32 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
         }
 
         var lists = await _store.GetListsAsync(cancellationToken).ConfigureAwait(false);
-        var eligible = new Dictionary<string, DiscoveryList>(StringComparer.Ordinal);
-        foreach (var list in lists)
+        if (!rules.RequireTrailer)
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (list.Films.Any(f => Resolve(user, f) is not null))
-            {
-                eligible.TryAdd(list.Id, list);
-            }
+            // Today's behaviour: any list with a film the user may see, picked afresh on every read.
+            var visible = lists.Where(l => l.Films.Any(f => Resolve(user, f) is not null));
+            var salt = await _store.GetPickSaltAsync(day, cancellationToken).ConfigureAwait(false);
+            return DiscoveryPicker.Pick(user.Id, day, visible, maxRows, salt);
         }
 
-        // The day's re-pick salt, if an admin asked for new picks: every caller (the rows, the picks API, the trailer
-        // queue) reads it here, so they agree.
-        var salt = await _store.GetPickSaltAsync(day, cancellationToken).ConfigureAwait(false);
-        return DiscoveryPicker.Pick(user.Id, day, eligible.Values, maxRows, salt);
+        var listIds = await _store.GetPickSnapshotAsync(user.Id, day, cancellationToken).ConfigureAwait(false)
+            ?? await PickReadyAsync(user, lists, rules.MinReadyFilms, day, cancellationToken).ConfigureAwait(false);
+
+        // The saved picks hold for the day; a list deleted since is left out.
+        var byId = lists.ToDictionary(l => l.Id, StringComparer.Ordinal);
+        return listIds
+            .Select(id => byId.GetValueOrDefault(id))
+            .OfType<DiscoveryList>()
+            .Take(maxRows)
+            .ToList();
     }
 
     /// <inheritdoc />
     public IReadOnlyList<DiscoveryRowItem> GetRowItems(User user, DiscoveryList list)
+        => GetRowItems(user, list, false);
+
+    /// <inheritdoc />
+    public IReadOnlyList<DiscoveryRowItem> GetRowItems(User user, DiscoveryList list, bool requireTrailer)
     {
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(list);
@@ -64,13 +76,76 @@ public sealed class DiscoveryRowPlanner : IDiscoveryRowPlanner
         var items = new List<DiscoveryRowItem>(list.Films.Count);
         foreach (var film in list.Films)
         {
-            if (Resolve(user, film) is { } item)
+            var item = requireTrailer ? ResolvePlayable(user, film) : Resolve(user, film);
+            if (item is not null)
             {
                 items.Add(new DiscoveryRowItem(film, item));
             }
         }
 
         return items;
+    }
+
+    /// <inheritdoc />
+    public int CountReadyFilms(User user, DiscoveryList list)
+    {
+        ArgumentNullException.ThrowIfNull(user);
+        ArgumentNullException.ThrowIfNull(list);
+
+        return CountReadyFilms(user, list, int.MaxValue);
+    }
+
+    private async Task<IReadOnlyList<string>> PickReadyAsync(User user, IReadOnlyList<DiscoveryList> lists, int minReadyFilms, DateOnly day, CancellationToken cancellationToken)
+    {
+        // The salt is read before readiness is worked out, so a re-pick that lands meanwhile makes the save a no-op.
+        var salt = await _store.GetPickSaltAsync(day, cancellationToken).ConfigureAwait(false);
+        var ready = new List<DiscoveryList>();
+        foreach (var list in lists)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (CountReadyFilms(user, list, minReadyFilms) >= minReadyFilms)
+            {
+                ready.Add(list);
+            }
+        }
+
+        // The full ordered pick is saved, so any maxRows reads a prefix of it.
+        var picked = DiscoveryPicker.Pick(user.Id, day, ready, ready.Count, salt).Select(l => l.Id).ToList();
+        if (picked.Count == 0)
+        {
+            // Nothing to keep stable: the first non-empty pick of the day is the one saved.
+            return picked;
+        }
+
+        return await _store.AddPickSnapshotAsync(user.Id, day, salt, picked, cancellationToken).ConfigureAwait(false);
+    }
+
+    private int CountReadyFilms(User user, DiscoveryList list, int stopAt)
+    {
+        var count = 0;
+        foreach (var film in list.Films)
+        {
+            if (ResolvePlayable(user, film) is not null && ++count >= stopAt)
+            {
+                break;
+            }
+        }
+
+        return count;
+    }
+
+    private BaseItem? ResolvePlayable(User user, DiscoveryFilmRef film)
+    {
+        // An owned film always plays; a virtual one only once a local trailer is attached.
+        if (_sync.FindOwned(user, film.TmdbId, film.ImdbId) is { } owned)
+        {
+            return owned;
+        }
+
+        var virtualFilm = _sync.FindFilm(film.TmdbId);
+        return virtualFilm is not null && virtualFilm.IsVisibleStandalone(user) && virtualFilm.GetExtras(_trailerTypes, user).Any()
+            ? virtualFilm
+            : null;
     }
 
     private BaseItem? Resolve(User user, DiscoveryFilmRef film)

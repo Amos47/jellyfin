@@ -308,7 +308,7 @@ public sealed class HomeRowsDiscoveryTests : IClassFixture<JellyfinApplicationFa
     }
 
     private static HomeRowInstanceDto Discovery(Guid id, int maxRows)
-        => new(id, HomeRowProviderIds.MovieDiscovery, null, new JsonObject { ["maxRows"] = maxRows }, true, false);
+        => new(id, HomeRowProviderIds.MovieDiscovery, null, new JsonObject { ["maxRows"] = maxRows, ["requireTrailer"] = false }, true, false);
 
     private static HomeRowInstanceDto Row(Guid id, string provider)
         => new(id, provider, null, new JsonObject(), true, false);

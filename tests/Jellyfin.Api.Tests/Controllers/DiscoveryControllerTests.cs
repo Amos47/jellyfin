@@ -25,6 +25,7 @@ public class DiscoveryControllerTests
     private readonly Mock<IDiscoveryFilmSync> _sync = new();
     private readonly Mock<IDiscoveryTrailers> _trailers = new();
     private readonly Mock<IDiscoveryUserPicks> _picks = new();
+    private readonly Mock<IDiscoveryRowPlanner> _planner = new();
     private readonly Mock<IUserManager> _userManager = new();
     private readonly DiscoveryController _subject;
 
@@ -35,6 +36,7 @@ public class DiscoveryControllerTests
             _sync.Object,
             _trailers.Object,
             _picks.Object,
+            _planner.Object,
             _userManager.Object,
             NullLogger<DiscoveryController>.Instance);
     }

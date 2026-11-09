@@ -40,6 +40,11 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
     /// </summary>
     public DbSet<CustomDiscoveryPickSalt> DiscoveryPickSalts => Set<CustomDiscoveryPickSalt>();
 
+    /// <summary>
+    /// Gets the saved discovery picks of each user and day.
+    /// </summary>
+    public DbSet<CustomDiscoveryPickSnapshot> DiscoveryPickSnapshots => Set<CustomDiscoveryPickSnapshot>();
+
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -79,6 +84,13 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
             entity.ToTable("CustomDiscoveryPickSalts");
             entity.HasKey(e => e.Day);
             entity.Property(e => e.Day).ValueGeneratedNever();
+        });
+
+        modelBuilder.Entity<CustomDiscoveryPickSnapshot>(entity =>
+        {
+            entity.ToTable("CustomDiscoveryPickSnapshots");
+            entity.HasKey(e => new { e.UserId, e.Day });
+            entity.HasIndex(e => e.Day);
         });
     }
 }

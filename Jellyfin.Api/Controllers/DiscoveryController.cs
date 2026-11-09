@@ -6,7 +6,12 @@ using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using Jellyfin.Api.Extensions;
 using Jellyfin.Api.Models.DiscoveryDtos;
+using Jellyfin.Data;
+using Jellyfin.Database.Implementations.Entities;
+using Jellyfin.Database.Implementations.Enums;
+using Jellyfin.Extensions;
 using MediaBrowser.Common.Api;
 using MediaBrowser.Controller.Discovery;
 using MediaBrowser.Controller.Library;
@@ -35,6 +40,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
     private readonly IDiscoveryFilmSync _filmSync;
     private readonly IDiscoveryTrailers _trailers;
     private readonly IDiscoveryUserPicks _picks;
+    private readonly IDiscoveryRowPlanner _planner;
     private readonly IUserManager _userManager;
     private readonly ILogger<DiscoveryController> _logger;
 
@@ -45,6 +51,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
     /// <param name="filmSync">Instance of the <see cref="IDiscoveryFilmSync"/> interface.</param>
     /// <param name="trailers">Instance of the <see cref="IDiscoveryTrailers"/> interface.</param>
     /// <param name="picks">Instance of the <see cref="IDiscoveryUserPicks"/> interface.</param>
+    /// <param name="planner">Instance of the <see cref="IDiscoveryRowPlanner"/> interface.</param>
     /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
     /// <param name="logger">Instance of the <see cref="ILogger{DiscoveryController}"/> interface.</param>
     public DiscoveryController(
@@ -52,6 +59,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
         IDiscoveryFilmSync filmSync,
         IDiscoveryTrailers trailers,
         IDiscoveryUserPicks picks,
+        IDiscoveryRowPlanner planner,
         IUserManager userManager,
         ILogger<DiscoveryController> logger)
     {
@@ -59,6 +67,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
         _filmSync = filmSync;
         _trailers = trailers;
         _picks = picks;
+        _planner = planner;
         _userManager = userManager;
         _logger = logger;
     }
@@ -102,8 +111,9 @@ public partial class DiscoveryController : BaseJellyfinApiController
     }
 
     /// <summary>
-    /// Re-picks a day: stores a new random salt for it, so every user's Movie discovery rows (and the picks API) pick
-    /// lists afresh for that day. The new picks hold until the next re-pick or the next day.
+    /// Re-picks a day: stores a new random salt for it and clears every user's saved picks of it, so every user's
+    /// Movie discovery rows (and the picks API) pick lists afresh for that day. The new picks hold until the next
+    /// re-pick or the next day.
     /// </summary>
     /// <param name="request">Optional: the day to re-pick. The body may be empty.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
@@ -158,7 +168,9 @@ public partial class DiscoveryController : BaseJellyfinApiController
     }
 
     /// <summary>
-    /// Gets the discovery lists.
+    /// Gets the discovery lists, each with how many of its films can be played now and whether that makes it ready.
+    /// The films are counted for the calling admin (for an API key, the first administrator): discovery films with a
+    /// local trailer, plus films owned in the library.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <response code="200">Lists returned.</response>
@@ -168,7 +180,8 @@ public partial class DiscoveryController : BaseJellyfinApiController
     public async Task<ActionResult<DiscoveryListDto[]>> GetLists(CancellationToken cancellationToken)
     {
         var lists = await _store.GetListsAsync(cancellationToken).ConfigureAwait(false);
-        return Ok(lists.Select(ToDto).ToArray());
+        var viewer = GetViewer();
+        return Ok(lists.Select(l => ToDto(l, viewer is null ? 0 : _planner.CountReadyFilms(viewer, l))).ToArray());
     }
 
     /// <summary>
@@ -315,8 +328,23 @@ public partial class DiscoveryController : BaseJellyfinApiController
 
     private static bool IsValidId(string id) => ListIdRegex().IsMatch(id);
 
-    private static DiscoveryListDto ToDto(DiscoveryList list)
-        => new(list.Id, list.Title, list.Source, list.Films.Select(f => new DiscoveryFilmDto(f.TmdbId, f.ImdbId)).ToArray(), list.Group);
+    private static DiscoveryListDto ToDto(DiscoveryList list, int readyFilms)
+        => new(
+            list.Id,
+            list.Title,
+            list.Source,
+            list.Films.Select(f => new DiscoveryFilmDto(f.TmdbId, f.ImdbId)).ToArray(),
+            list.Group,
+            readyFilms,
+            readyFilms >= DiscoveryPickRules.DefaultMinReadyFilms);
+
+    // The calling admin; an API key has no user, so the first administrator stands in.
+    private User? GetViewer()
+    {
+        var userId = User.GetUserId();
+        return (userId.IsEmpty() ? null : _userManager.GetUserById(userId))
+            ?? _userManager.GetUsers().FirstOrDefault(u => u.HasPermission(PermissionKind.IsAdministrator));
+    }
 
     // \z rather than $, which would also let a trailing newline through.
     [GeneratedRegex(@"^[a-z0-9-]{1,64}\z")]

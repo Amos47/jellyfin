@@ -13,16 +13,26 @@ namespace MediaBrowser.Controller.Discovery;
 public interface IDiscoveryRowPlanner
 {
     /// <summary>
-    /// Gets the lists picked for a user on a day, in display order. Only lists with at least one film the user may
-    /// see are eligible (an owned library film counts as visible); <see cref="DiscoveryPicker"/> picks among them, one
-    /// list per group, with the day's re-pick salt from <see cref="IDiscoveryStore.GetPickSaltAsync"/>.
+    /// Gets the lists picked for a user on a day, in display order. <see cref="DiscoveryPicker"/> picks among the
+    /// eligible lists, one list per group, with the day's re-pick salt from <see cref="IDiscoveryStore.GetPickSaltAsync"/>.
+    /// <list type="bullet">
+    /// <item>With <see cref="DiscoveryPickRules.RequireTrailer"/> on, a list is eligible when it has at least
+    /// <see cref="DiscoveryPickRules.MinReadyFilms"/> films playable for the user (see <see cref="CountReadyFilms"/>).
+    /// The user's first non-empty pick of the day is saved in full (<see cref="IDiscoveryStore.AddPickSnapshotAsync"/>)
+    /// and read back for the rest of the day, so lists becoming ready (or unready) later don't change it; a smaller
+    /// <paramref name="maxRows"/> takes a prefix, and saved lists that were deleted since are left out. A re-pick
+    /// clears the saved picks of its day.</item>
+    /// <item>With it off, a list is eligible when it has at least one film the user may see (an owned library film
+    /// counts as visible), and nothing is saved.</item>
+    /// </list>
     /// </summary>
     /// <param name="user">The user.</param>
     /// <param name="maxRows">The most lists to return.</param>
+    /// <param name="rules">The row's readiness rules.</param>
     /// <param name="day">The server's local date.</param>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <returns>The picked lists.</returns>
-    Task<IReadOnlyList<DiscoveryList>> GetPickedListsAsync(User user, int maxRows, DateOnly day, CancellationToken cancellationToken);
+    Task<IReadOnlyList<DiscoveryList>> GetPickedListsAsync(User user, int maxRows, DiscoveryPickRules rules, DateOnly day, CancellationToken cancellationToken);
 
     /// <summary>
     /// Gets the films of a list as the user sees them, in list order: the user's library film when they own it,
@@ -32,4 +42,23 @@ public interface IDiscoveryRowPlanner
     /// <param name="list">The list.</param>
     /// <returns>The row items.</returns>
     IReadOnlyList<DiscoveryRowItem> GetRowItems(User user, DiscoveryList list);
+
+    /// <summary>
+    /// Gets the films of a list as the user sees them, as <see cref="GetRowItems(User, DiscoveryList)"/> does; with
+    /// <paramref name="requireTrailer"/>, only the playable ones: owned films, and virtual films with a local trailer.
+    /// </summary>
+    /// <param name="user">The user.</param>
+    /// <param name="list">The list.</param>
+    /// <param name="requireTrailer">Whether to keep only playable films.</param>
+    /// <returns>The row items.</returns>
+    IReadOnlyList<DiscoveryRowItem> GetRowItems(User user, DiscoveryList list, bool requireTrailer);
+
+    /// <summary>
+    /// Counts the films of a list that are playable for the user: films they own (visible through their library
+    /// query), plus virtual discovery films they may see that have at least one local trailer.
+    /// </summary>
+    /// <param name="user">The user.</param>
+    /// <param name="list">The list.</param>
+    /// <returns>The number of playable films.</returns>
+    int CountReadyFilms(User user, DiscoveryList list);
 }

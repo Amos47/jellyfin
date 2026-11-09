@@ -107,6 +107,64 @@ public sealed class DiscoveryStoreTests : IAsyncLifetime, IDisposable
     }
 
     [Fact]
+    public async Task PickSnapshot_NoneByDefault_FirstSaveWins_PerUserAndDay()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var user = Guid.NewGuid();
+        var other = Guid.NewGuid();
+
+        Assert.Null(await _store.GetPickSnapshotAsync(user, today, ct));
+
+        Assert.Equal(new[] { "b", "a" }, await _store.AddPickSnapshotAsync(user, today, null, ["b", "a"], ct));
+        Assert.Equal(new[] { "b", "a" }, await _store.AddPickSnapshotAsync(user, today, null, ["c"], ct));
+        Assert.Equal(new[] { "c" }, await _store.AddPickSnapshotAsync(other, today, null, ["c"], ct));
+        Assert.Equal(new[] { "d" }, await _store.AddPickSnapshotAsync(user, today.AddDays(1), null, ["d"], ct));
+
+        Assert.Equal(new[] { "b", "a" }, await _store.GetPickSnapshotAsync(user, today, ct));
+        Assert.Equal(new[] { "c" }, await _store.GetPickSnapshotAsync(other, today, ct));
+        Assert.Equal(new[] { "d" }, await _store.GetPickSnapshotAsync(user, today.AddDays(1), ct));
+    }
+
+    [Fact]
+    public async Task PickSnapshot_RePickClearsThatDay_StaleSaltNotSaved()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var user = Guid.NewGuid();
+        await _store.AddPickSnapshotAsync(user, today, null, ["a"], ct);
+        await _store.AddPickSnapshotAsync(user, today.AddDays(1), null, ["t"], ct);
+
+        await _store.SetPickSaltAsync(today, "new-salt", ct);
+
+        Assert.Null(await _store.GetPickSnapshotAsync(user, today, ct));
+        Assert.Equal(new[] { "t" }, await _store.GetPickSnapshotAsync(user, today.AddDays(1), ct));
+
+        // Picks worked out with the salt from before the re-pick are not saved.
+        Assert.Equal(new[] { "old" }, await _store.AddPickSnapshotAsync(user, today, null, ["old"], ct));
+        Assert.Null(await _store.GetPickSnapshotAsync(user, today, ct));
+        Assert.Equal(new[] { "new" }, await _store.AddPickSnapshotAsync(user, today, "new-salt", ["new"], ct));
+        Assert.Equal(new[] { "new" }, await _store.GetPickSnapshotAsync(user, today, ct));
+    }
+
+    [Fact]
+    public async Task PickSnapshot_OldDaysPruned()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var today = DateOnly.FromDateTime(DateTime.Now);
+        var user = Guid.NewGuid();
+        var old = today.AddDays(-60);
+
+        await _store.AddPickSnapshotAsync(user, old, null, ["old"], ct);
+        Assert.Equal(new[] { "old" }, await _store.GetPickSnapshotAsync(user, old, ct));
+
+        await _store.AddPickSnapshotAsync(user, today, null, ["new"], ct);
+
+        Assert.Null(await _store.GetPickSnapshotAsync(user, old, ct));
+        Assert.Equal(new[] { "new" }, await _store.GetPickSnapshotAsync(user, today, ct));
+    }
+
+    [Fact]
     public async Task SetList_SameId_Replaces()
     {
         var ct = TestContext.Current.CancellationToken;

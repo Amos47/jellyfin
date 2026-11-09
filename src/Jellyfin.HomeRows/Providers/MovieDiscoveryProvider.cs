@@ -13,13 +13,16 @@ namespace Jellyfin.HomeRows.Providers;
 
 /// <summary>
 /// Fork: Movie discovery. Expands into one row per discovery list picked for the user today, each titled with the
-/// list's title. Which lists and films are shown is decided by <see cref="IDiscoveryRowPlanner"/>. A sub-row's key is
+/// list's title. Which lists and films are shown is decided by <see cref="IDiscoveryRowPlanner"/>, with the row's
+/// <c>requireTrailer</c> and <c>minReadyFilms</c> rules (<see cref="GetPickRules"/>). A sub-row's key is
 /// its list id, so a derived row id always serves the same list, even after the day's picks change.
 /// </summary>
 public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
 {
     private const string MaxRowsKey = "maxRows";
     private const string ExternalTrailersKey = "externalTrailers";
+    private const string RequireTrailerKey = "requireTrailer";
+    private const string MinReadyFilmsKey = "minReadyFilms";
     private const int DefaultMaxRows = 3;
     private const int MaxMaxRows = 10;
     private const string DefaultCardStyle = "poster";
@@ -68,6 +71,18 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
                 Description = "Show online trailers (such as YouTube) on films you don't own. Off shows only downloaded trailers.",
                 Default = JsonValue.Create(false)
             },
+            new HomeRowSetting(RequireTrailerKey, HomeRowSettingType.Boolean, "Only films you can play")
+            {
+                Description = "Show only films you own or that have a downloaded trailer, and pick only lists with enough of them. The day's lists are then kept for the day.",
+                Default = JsonValue.Create(true)
+            },
+            new HomeRowSetting(MinReadyFilmsKey, HomeRowSettingType.Integer, "Films a list needs")
+            {
+                Description = "How many films you can play a list needs before it is picked, while only films you can play are shown.",
+                Default = JsonValue.Create(DiscoveryPickRules.DefaultMinReadyFilms),
+                Minimum = DiscoveryPickRules.MinimumMinReadyFilms,
+                Maximum = DiscoveryPickRules.MaximumMinReadyFilms
+            },
             CardStyleSetting.Create(DefaultCardStyle)
         ]));
 
@@ -77,7 +92,7 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(config);
 
-        var lists = await _planner.GetPickedListsAsync(context.User, GetMaxRows(config), GetDay(context), ct).ConfigureAwait(false);
+        var lists = await _planner.GetPickedListsAsync(context.User, GetMaxRows(config), GetPickRules(config), GetDay(context), ct).ConfigureAwait(false);
         return lists.Select(l => new HomeSubRow(l.Id)).ToArray();
     }
 
@@ -105,7 +120,7 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
         if (context.SubRowKey is null)
         {
             // The parent row's own id: today's first pick.
-            var lists = await _planner.GetPickedListsAsync(context.User, GetMaxRows(config), day, cancellationToken).ConfigureAwait(false);
+            var lists = await _planner.GetPickedListsAsync(context.User, GetMaxRows(config), GetPickRules(config), day, cancellationToken).ConfigureAwait(false);
             list = lists.Count > 0 ? lists[0] : null;
         }
         else if (context.SubRowKey.Length == 0)
@@ -125,7 +140,8 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
             return new HomeRowResult([], 0, presentation);
         }
 
-        var items = _planner.GetRowItems(context.User, list);
+        // With requireTrailer, only the films the user can play now, in list order, even on a list picked earlier.
+        var items = _planner.GetRowItems(context.User, list, GetPickRules(config).RequireTrailer);
         var page = items.Skip(paging.StartIndex).Take(paging.Limit).ToArray();
         if (page.Length > 0)
         {
@@ -161,6 +177,23 @@ public sealed class MovieDiscoveryProvider : IExpandingHomeRowProvider
     /// <returns>Whether discovery films show their external trailers.</returns>
     internal static bool GetExternalTrailers(JsonObject config)
         => config[ExternalTrailersKey] is JsonValue v && v.TryGetValue<bool>(out var on) && on;
+
+    /// <summary>
+    /// Gets the readiness rules of a Movie discovery row's config: <c>requireTrailer</c> (true unless it is the
+    /// boolean false) and <c>minReadyFilms</c> (clamped to 1 to 20, else the default 5).
+    /// </summary>
+    /// <param name="config">The row config.</param>
+    /// <returns>The rules.</returns>
+    public static DiscoveryPickRules GetPickRules(JsonObject config)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        var requireTrailer = config[RequireTrailerKey] is not JsonValue r || !r.TryGetValue<bool>(out var on) || on;
+        var minReadyFilms = config[MinReadyFilmsKey] is JsonValue m && m.TryGetValue<int>(out var min)
+            ? Math.Clamp(min, DiscoveryPickRules.MinimumMinReadyFilms, DiscoveryPickRules.MaximumMinReadyFilms)
+            : DiscoveryPickRules.DefaultMinReadyFilms;
+        return new DiscoveryPickRules(requireTrailer, minReadyFilms);
+    }
 
     // The pick changes at the server's local midnight.
     private static DateOnly GetDay(HomeRowContext context)

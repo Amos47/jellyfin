@@ -79,7 +79,7 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
             var expected = new HashSet<int>();
             foreach (var user in new[] { a, b })
             {
-                foreach (var list in await Planner.GetPickedListsAsync(user, 1, date, Ct))
+                foreach (var list in await Planner.GetPickedListsAsync(user, 1, DiscoveryPickRules.AllVisible, date, Ct))
                 {
                     expected.UnionWith(list.Films.Select(f => f.TmdbId));
                 }
@@ -121,7 +121,7 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
             var explicitPicks = await GetAsync<JsonObject>(client, $"Discovery/Picks?date={tomorrow:yyyy-MM-dd}");
 
             Assert.Equal(tomorrow.ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture), (string?)picks["Date"]);
-            var expected = (await Planner.GetPickedListsAsync(user, 1, tomorrow, Ct)).SelectMany(l => l.Films).Select(f => f.TmdbId);
+            var expected = (await Planner.GetPickedListsAsync(user, 1, DiscoveryPickRules.AllVisible, tomorrow, Ct)).SelectMany(l => l.Films).Select(f => f.TmdbId);
             Assert.Equal(expected.Order(), picks["TmdbIds"]!.AsArray().Select(n => (int)n!).Order());
             Assert.Equal(
                 explicitPicks["TmdbIds"]!.AsArray().Select(n => (int)n!),
@@ -367,7 +367,7 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
             var last = await SetTrailerAsync(client, 1183, "owned-row-1183");
             await SaveLayoutAsync(admin, maxRows: 10, enabled: true);
             Assert.Contains(
-                (await Planner.GetPickedListsAsync(admin, 10, DateOnly.FromDateTime(DateTime.Now), Ct)).SelectMany(l => Planner.GetRowItems(admin, l)),
+                (await Planner.GetPickedListsAsync(admin, 10, DiscoveryPickRules.AllVisible, DateOnly.FromDateTime(DateTime.Now), Ct)).SelectMany(l => Planner.GetRowItems(admin, l)),
                 i => i.Item.Id.Equals(owned.Id));
 
             var fromFirst = await GetQueueAsync(client, Sync.FindFilm(1181)!.Id);
@@ -505,7 +505,7 @@ public sealed class DiscoveryPicksActionsTests : IClassFixture<JellyfinApplicati
     {
         var errors = await Layouts.SaveUserLayoutAsync(
             user,
-            [new HomeRowInstance(Guid.NewGuid(), HomeRowProviderIds.MovieDiscovery, null, new JsonObject { ["maxRows"] = maxRows }, enabled)],
+            [new HomeRowInstance(Guid.NewGuid(), HomeRowProviderIds.MovieDiscovery, null, new JsonObject { ["maxRows"] = maxRows, ["requireTrailer"] = false }, enabled)],
             Ct);
         Assert.Empty(errors);
     }
