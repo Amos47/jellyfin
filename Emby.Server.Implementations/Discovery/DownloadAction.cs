@@ -25,8 +25,10 @@ namespace Emby.Server.Implementations.Discovery;
 /// <para>
 /// On a show (virtual or in a library) it is "Get series": offered while the show page
 /// (<see cref="IShowSeasonsService"/>) has a season to get, or a season on its way. Its state follows the seasons:
-/// <see cref="StateDownloading"/> if any is downloading, else <see cref="StateRequested"/> if any is requested, else
-/// <see cref="StateFailed"/> if a season's last request failed, else <see cref="StateAvailable"/>. Posting it requests
+/// while any season can be got, <see cref="StateFailed"/> if one of those last failed, else
+/// <see cref="StateAvailable"/> (both enabled); with none left to get, <see cref="StateDownloading"/> if any is
+/// downloading, else <see cref="StateRequested"/> (both disabled). A virtual show's series request (older apps) only
+/// counts while the show has no season requests. Posting it requests
 /// every season that can be got; on a virtual discovery show it also makes today's series request and saves the show,
 /// so older apps keep working.
 /// </para>
@@ -225,21 +227,30 @@ public sealed class DownloadAction : IItemActionProvider
 
     private static ItemAction? CreateSeries(ShowSeasonsPage page, string? seriesRequestState)
     {
-        var downloading = seriesRequestState == DiscoveryRequest.StateDownloading
-            || page.Seasons.Any(s => s.State == SeasonView.StateDownloading);
-        var requested = seriesRequestState == DiscoveryRequest.StateRequested
-            || page.Seasons.Any(s => s.State == SeasonView.StateRequested);
-        if (!page.CanGetSeries && !downloading && !requested)
+        // Once the show has season requests, the seasons decide; the series request older apps made only counts
+        // without them.
+        var legacy = page.HasSeasonRequests ? null : seriesRequestState;
+        var downloading = page.Seasons.Any(s => s.State == SeasonView.StateDownloading);
+        var requested = page.Seasons.Any(s => s.State == SeasonView.StateRequested);
+        string state;
+        if (legacy is DiscoveryRequest.StateDownloading or DiscoveryRequest.StateRequested)
+        {
+            state = legacy == DiscoveryRequest.StateDownloading || downloading ? StateDownloading : StateRequested;
+        }
+        else if (page.CanGetSeries)
+        {
+            // A season can be got: Get series stays available, whatever the other seasons are doing.
+            var failed = legacy == DiscoveryRequest.StateFailed || page.Seasons.Any(s => s.CanGet && s.RequestFailed);
+            state = failed ? StateFailed : StateAvailable;
+        }
+        else if (downloading || requested)
+        {
+            state = downloading ? StateDownloading : StateRequested;
+        }
+        else
         {
             return null;
         }
-
-        var failed = seriesRequestState == DiscoveryRequest.StateFailed
-            || page.Seasons.Any(s => s.CanGet && s.RequestFailed);
-        var state = downloading ? StateDownloading
-            : requested ? StateRequested
-            : failed ? StateFailed
-            : StateAvailable;
 
         return new ItemAction(ActionId, _seriesLabels[state], "download", ItemAction.RequestKind)
         {

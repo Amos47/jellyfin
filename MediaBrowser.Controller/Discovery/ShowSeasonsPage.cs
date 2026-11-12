@@ -9,4 +9,5 @@ namespace MediaBrowser.Controller.Discovery;
 /// <param name="CanGetSeries">Whether "Get series" is offered: some season can be got.</param>
 /// <param name="GetSeriesSeasonCount">How many seasons "Get series" gets.</param>
 /// <param name="Seasons">The seasons, by season number.</param>
-public record ShowSeasonsPage(int? SeriesTmdbId, bool CanGetSeries, int GetSeriesSeasonCount, IReadOnlyList<SeasonView> Seasons);
+/// <param name="HasSeasonRequests">Whether the show has any season request (not sent to clients).</param>
+public record ShowSeasonsPage(int? SeriesTmdbId, bool CanGetSeries, int GetSeriesSeasonCount, IReadOnlyList<SeasonView> Seasons, bool HasSeasonRequests = false);

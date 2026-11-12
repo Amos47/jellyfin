@@ -79,9 +79,13 @@ public class DownloadActionTests
         await shows.Action.PerformAsync(_user, show, Ct);
         shows.Seasons.Verify(s => s.RequestAsync(It.IsAny<int>(), It.IsAny<IReadOnlyCollection<int>>(), It.IsAny<Guid>(), It.IsAny<CancellationToken>()), Times.Once);
 
-        // Downloading once Sonarr has it; Retry when a season's request failed.
+        // Getting… once Sonarr has every season; Retry when a season's request failed.
         shows.SetRequests(1100);
-        shows.SetSonarr(1100, new SonarrSeasonStatus(1100, 2, SonarrSeasonStatus.StatusDownloading, false));
+        shows.SetSonarr(
+            1100,
+            new SonarrSeasonStatus(1100, 1, SonarrSeasonStatus.StatusDownloading, false),
+            new SonarrSeasonStatus(1100, 2, SonarrSeasonStatus.StatusDownloading, false),
+            new SonarrSeasonStatus(1100, 3, SonarrSeasonStatus.StatusDownloading, false));
         var downloading = await shows.Action.GetActionAsync(_user, show, Ct);
         Assert.Equal((DownloadAction.StateDownloading, "Getting…", false), (downloading!.State, downloading.Label, downloading.Enabled));
 
@@ -89,6 +93,72 @@ public class DownloadActionTests
         shows.SetRequests(1100, new SeasonRequest(1100, 2, SeasonRequest.StateFailed, "no release", DateTime.UtcNow));
         var failed = await shows.Action.GetActionAsync(_user, show, Ct);
         Assert.Equal((DownloadAction.StateFailed, "Retry", true), (failed!.State, failed.Label, failed.Enabled));
+    }
+
+    [Fact]
+    public async Task GetSeries_EnabledWhileAnySeasonGettable_EvenIfAnotherIsWanted()
+    {
+        var shows = new ShowFixture();
+        var show = shows.Series(1110);
+        shows.Tmdb(1110, 4);
+        shows.AddLibrary(1, 10);
+
+        // The owner's show: season 2 wanted by Sonarr (monitored, never got), season 3 downloading, season 4 with
+        // nothing on its way.
+        shows.SetSonarr(
+            1110,
+            new SonarrSeasonStatus(1110, 2, SonarrSeasonStatus.StatusWanted, false),
+            new SonarrSeasonStatus(1110, 3, SonarrSeasonStatus.StatusDownloading, false));
+
+        var action = await shows.Action.GetActionAsync(_user, show, Ct);
+        Assert.Equal((DownloadAction.StateAvailable, "Get series", true), (action!.State, action.Label, action.Enabled));
+
+        // Get series gets only season 4.
+        await shows.Action.PerformAsync(_user, show, Ct);
+        shows.Seasons.Verify(s => s.RequestAsync(1110, It.Is<IReadOnlyCollection<int>>(n => n.SequenceEqual(new[] { 4 })), _user.Id, It.IsAny<CancellationToken>()), Times.Once);
+
+        // Nothing left to get: the seasons on their way decide, disabled.
+        var after = await shows.Action.GetActionAsync(_user, show, Ct);
+        Assert.Equal((DownloadAction.StateDownloading, "Getting…", false), (after!.State, after.Label, after.Enabled));
+        shows.SetSonarr(
+            1110,
+            new SonarrSeasonStatus(1110, 2, SonarrSeasonStatus.StatusWanted, false),
+            new SonarrSeasonStatus(1110, 3, SonarrSeasonStatus.StatusWanted, false));
+        var requested = await shows.Action.GetActionAsync(_user, show, Ct);
+        Assert.Equal((DownloadAction.StateRequested, "Requested", false), (requested!.State, requested.Label, requested.Enabled));
+    }
+
+    [Fact]
+    public async Task VirtualSeries_WithSeasonRequests_StateFromSeasons_NotLegacy()
+    {
+        var shows = new ShowFixture();
+        var show = shows.Series(1120);
+        shows.Sync.Setup(s => s.FindSeries(1120)).Returns(show);
+        shows.Tmdb(1120, 2);
+
+        // The legacy series request says downloading (an app marked it once), but the seasons say otherwise.
+        shows.Requests.Setup(r => r.GetAsync(1120, DiscoveryMediaType.Series, It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new DiscoveryRequest(1120, DiscoveryRequest.StateDownloading, DateTime.UtcNow, [], DiscoveryMediaType.Series));
+        shows.SetRequests(1120, new SeasonRequest(1120, 1, SeasonRequest.StateHandled, null, DateTime.UtcNow));
+        shows.SetSonarr(1120, new SonarrSeasonStatus(1120, 1, SonarrSeasonStatus.StatusIdle, false));
+
+        // Season 1 searched and settled with nothing, season 2 never asked: Get series, enabled.
+        var action = await shows.Action.GetActionAsync(_user, show, Ct);
+        Assert.Equal((DownloadAction.StateAvailable, "Get series", true), (action!.State, action.Label, action.Enabled));
+
+        // Both wanted by Sonarr: Requested, not the legacy Getting….
+        shows.SetSonarr(
+            1120,
+            new SonarrSeasonStatus(1120, 1, SonarrSeasonStatus.StatusWanted, false),
+            new SonarrSeasonStatus(1120, 2, SonarrSeasonStatus.StatusWanted, false));
+        var wanted = await shows.Action.GetActionAsync(_user, show, Ct);
+        Assert.Equal((DownloadAction.StateRequested, "Requested", false), (wanted!.State, wanted.Label, wanted.Enabled));
+
+        // No season requests at all (an older app's request): the legacy request still decides.
+        shows.SetRequests(1120);
+        shows.SetSonarr(1120);
+        var legacy = await shows.Action.GetActionAsync(_user, show, Ct);
+        Assert.Equal((DownloadAction.StateDownloading, "Getting…", false), (legacy!.State, legacy.Label, legacy.Enabled));
     }
 
     [Fact]

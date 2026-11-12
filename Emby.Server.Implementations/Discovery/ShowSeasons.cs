@@ -24,7 +24,7 @@ public static class ShowSeasons
     /// <list type="number">
     /// <item>F ≥ A with A &gt; 0, or a season only the library has: on the server.</item>
     /// <item>Else a pending request: requested.</item>
-    /// <item>Else by Sonarr: downloading, wanted (requested), or idle (partly). With nothing aired, only downloading counts.</item>
+    /// <item>Else by Sonarr: downloading, wanted (requested), or idle (partly with F &gt; 0, else not on the server). With nothing aired, only downloading counts.</item>
     /// <item>Else F &gt; 0: partly.</item>
     /// <item>Else not on the server (a failed request too).</item>
     /// </list>
@@ -147,7 +147,8 @@ public static class ShowSeasons
             case SonarrSeasonStatus.StatusWanted when aired > 0:
                 return SeasonView.StateRequested;
             case SonarrSeasonStatus.StatusIdle when aired > 0:
-                return SeasonView.StatePartly;
+                // Searched and settled: partly with some, not on the server with none.
+                return onServer > 0 ? SeasonView.StatePartly : SeasonView.StateNotOnServer;
         }
 
         return onServer > 0 ? SeasonView.StatePartly : SeasonView.StateNotOnServer;

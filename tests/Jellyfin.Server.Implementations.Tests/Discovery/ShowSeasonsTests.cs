@@ -117,7 +117,7 @@ public class ShowSeasonsTests
         var seasons = ShowSeasons.Build(library, [Tmdb(4, 22), Tmdb(5, 22)], _noRequests, sonarr, _today, canGet: true);
 
         Assert.Equal((SeasonView.StatePartly, false), (Season(seasons, 4).State, Season(seasons, 4).CanGet));
-        Assert.Equal((SeasonView.StatePartly, false), (Season(seasons, 5).State, Season(seasons, 5).CanGet));
+        Assert.Equal((SeasonView.StateNotOnServer, false), (Season(seasons, 5).State, Season(seasons, 5).CanGet));
     }
 
     [Fact]
@@ -221,6 +221,16 @@ public class ShowSeasonsTests
     }
 
     [Fact]
+    public void IdleWithNothingOnServer_IsNotOnServer()
+    {
+        var seasons = ShowSeasons.Build([], [Tmdb(6, 10)], _noRequests, [Sonarr(6, SonarrSeasonStatus.StatusIdle)], _today, canGet: true);
+
+        var s6 = Season(seasons, 6);
+        Assert.Equal((SeasonView.StateNotOnServer, 0, true), (s6.State, s6.OnServer, s6.CanGet));
+        Assert.All(s6.Episodes, e => Assert.Equal(EpisodeView.StateNotOnServer, e.State));
+    }
+
+    [Fact]
     public void IdleWithFewer_IsPartly()
     {
         var library = Library(5, 1, 9).ToList();
@@ -232,9 +242,9 @@ public class ShowSeasonsTests
         Assert.Equal((SeasonView.StatePartly, 9, 22, true), (s5.State, s5.OnServer, s5.Aired, s5.CanGet));
         Assert.Equal(13, s5.Episodes.Count(e => e.State == EpisodeView.StateNotOnServer));
 
-        // Searched and nothing found: partly with none, and Get is offered again.
+        // Searched and nothing found, none on the server: Get is offered again.
         var s6 = Season(seasons, 6);
-        Assert.Equal((SeasonView.StatePartly, 0, true), (s6.State, s6.OnServer, s6.CanGet));
+        Assert.Equal((SeasonView.StateNotOnServer, 0, true), (s6.State, s6.OnServer, s6.CanGet));
 
         // A pending request comes first, then Sonarr.
         var pending = Season(ShowSeasons.Build(library, [Tmdb(5, 22)], [Request(5, SeasonRequest.StatePending)], sonarr, _today, canGet: true), 5);

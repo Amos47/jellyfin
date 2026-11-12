@@ -128,7 +128,7 @@ public sealed class ShowSeasonsService : IShowSeasonsService
         var canGet = await _requests.GetDownloadsEnabledAsync(DiscoveryMediaType.Series, ct).ConfigureAwait(false);
         var requests = await _seasons.GetAsync(tmdbId, ct).ConfigureAwait(false);
         var sonarr = await _seasons.GetSonarrStatusAsync(tmdbId, ct).ConfigureAwait(false);
-        return ToPage(tmdbId, ShowSeasons.Build(library, tmdb, requests, sonarr, today, canGet));
+        return ToPage(tmdbId, ShowSeasons.Build(library, tmdb, requests, sonarr, today, canGet), requests.Count > 0);
     }
 
     /// <inheritdoc />
@@ -209,10 +209,10 @@ public sealed class ShowSeasonsService : IShowSeasonsService
     private static IReadOnlyList<LibraryEpisode> ReadLibrary(User user, Series series)
         => ToLibraryEpisodes(series.GetEpisodes(user, new DtoOptions(false), shouldIncludeMissingEpisodes: false));
 
-    private static ShowSeasonsPage ToPage(int? tmdbId, IReadOnlyList<SeasonView> seasons)
+    private static ShowSeasonsPage ToPage(int? tmdbId, IReadOnlyList<SeasonView> seasons, bool hasSeasonRequests = false)
     {
         var gettable = seasons.Count(s => s.CanGet);
-        return new ShowSeasonsPage(tmdbId, gettable > 0, gettable, seasons);
+        return new ShowSeasonsPage(tmdbId, gettable > 0, gettable, seasons, hasSeasonRequests);
     }
 
     private static int? GetTmdbId(Series series)
