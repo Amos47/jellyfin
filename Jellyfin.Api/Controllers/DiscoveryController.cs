@@ -43,6 +43,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
     private readonly IDiscoveryRowPlanner _planner;
     private readonly IDiscoveryUserSettings _settings;
     private readonly IDiscoveryRequestStore _requests;
+    private readonly ISeasonStore _seasons;
     private readonly IUserListStore _userLists;
     private readonly IUserManager _userManager;
     private readonly ILogger<DiscoveryController> _logger;
@@ -57,6 +58,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
     /// <param name="planner">Instance of the <see cref="IDiscoveryRowPlanner"/> interface.</param>
     /// <param name="settings">Instance of the <see cref="IDiscoveryUserSettings"/> interface.</param>
     /// <param name="requests">Instance of the <see cref="IDiscoveryRequestStore"/> interface.</param>
+    /// <param name="seasons">Instance of the <see cref="ISeasonStore"/> interface.</param>
     /// <param name="userLists">Instance of the <see cref="IUserListStore"/> interface.</param>
     /// <param name="userManager">Instance of the <see cref="IUserManager"/> interface.</param>
     /// <param name="logger">Instance of the <see cref="ILogger{DiscoveryController}"/> interface.</param>
@@ -68,6 +70,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
         IDiscoveryRowPlanner planner,
         IDiscoveryUserSettings settings,
         IDiscoveryRequestStore requests,
+        ISeasonStore seasons,
         IUserListStore userLists,
         IUserManager userManager,
         ILogger<DiscoveryController> logger)
@@ -79,6 +82,7 @@ public partial class DiscoveryController : BaseJellyfinApiController
         _planner = planner;
         _settings = settings;
         _requests = requests;
+        _seasons = seasons;
         _userLists = userLists;
         _userManager = userManager;
         _logger = logger;
@@ -543,6 +547,124 @@ public partial class DiscoveryController : BaseJellyfinApiController
     }
 
     /// <summary>
+    /// Gets the season requests the discovery app has to carry out in Sonarr, one entry per series with its season
+    /// numbers ascending, by series TMDB id. <c>SeriesPath</c> is the folder of the series in the library (null when no
+    /// library has it), so the app can find or add the show in Sonarr at that folder.
+    /// </summary>
+    /// <param name="state">Optional: the state of the requests; only <c>pending</c>, the default.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="200">Requests returned.</response>
+    /// <response code="400">The state is not pending.</response>
+    /// <returns>The requests, grouped by series.</returns>
+    [HttpGet("SeasonRequests")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult<DiscoverySeasonRequestDto[]>> GetSeasonRequests(
+        [FromQuery] string? state,
+        CancellationToken cancellationToken)
+    {
+        if (state is not null && !string.Equals(state, SeasonRequest.StatePending, StringComparison.Ordinal))
+        {
+            return BadRequest("The state must be pending.");
+        }
+
+        var pending = await _seasons.GetPendingAsync(cancellationToken).ConfigureAwait(false);
+        var groups = pending
+            .GroupBy(r => r.SeriesTmdbId)
+            .OrderBy(g => g.Key)
+            .Select(g =>
+            {
+                var owned = _filmSync.FindOwnedTitle(g.Key, null, DiscoveryMediaType.Series);
+                var name = owned?.Name ?? _filmSync.FindTitle(g.Key, DiscoveryMediaType.Series)?.Name;
+                return new DiscoverySeasonRequestDto(
+                    g.Key,
+                    g.Select(r => r.SeasonNumber).Distinct().Order().ToArray(),
+                    owned?.Path,
+                    name);
+            })
+            .ToArray();
+        return Ok(groups);
+    }
+
+    /// <summary>
+    /// Reports the outcome of a season request: <c>handled</c> once Sonarr monitors the season and searches it, or
+    /// <c>failed</c> with an optional <c>Reason</c>, which offers Get again.
+    /// </summary>
+    /// <param name="seriesTmdbId">The TMDB id of the series.</param>
+    /// <param name="season">The season number.</param>
+    /// <param name="update">The new state.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="204">State set.</response>
+    /// <response code="400">The state is not handled or failed.</response>
+    /// <response code="404">Nobody requested the season.</response>
+    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    [HttpPut("SeasonRequests/{seriesTmdbId}/{season}")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult> SetSeasonRequestState(
+        [FromRoute, Required] int seriesTmdbId,
+        [FromRoute, Required] int season,
+        [FromBody, Required] DiscoverySeasonRequestUpdateDto update,
+        CancellationToken cancellationToken)
+    {
+        if (update.State is not (SeasonRequest.StateHandled or SeasonRequest.StateFailed))
+        {
+            return BadRequest("The state must be handled or failed.");
+        }
+
+        var requests = await _seasons.GetAsync(seriesTmdbId, cancellationToken).ConfigureAwait(false);
+        if (!requests.Any(r => r.SeasonNumber == season))
+        {
+            return NotFound();
+        }
+
+        // Not the request's token: once reported, the state stands even if the client hangs up.
+        await _seasons.SetStateAsync(seriesTmdbId, season, update.State, update.Reason, CancellationToken.None).ConfigureAwait(false);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Replaces what Sonarr is doing with every season it has: the discovery app sends all of them each time, and a
+    /// season left out has no status any more.
+    /// </summary>
+    /// <param name="report">The seasons.</param>
+    /// <param name="cancellationToken">The cancellation token.</param>
+    /// <response code="204">Statuses replaced.</response>
+    /// <response code="400">The seasons are missing, or one has an unknown status, a TMDB id that isn't positive or a negative season number.</response>
+    /// <returns>A <see cref="NoContentResult"/>.</returns>
+    [HttpPut("SonarrSeasons")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<ActionResult> SetSonarrSeasons([FromBody, Required] DiscoverySonarrSeasonsDto report, CancellationToken cancellationToken)
+    {
+        if (report.Seasons is null)
+        {
+            return BadRequest("The seasons are required.");
+        }
+
+        var statuses = new List<SonarrSeasonStatus>(report.Seasons.Count);
+        foreach (var season in report.Seasons)
+        {
+            if (season is null || season.SeriesTmdbId <= 0 || season.SeasonNumber < 0)
+            {
+                return BadRequest("Every season needs a positive series TMDB id and a season number of 0 or more.");
+            }
+
+            if (!SonarrSeasonStatus.IsStatus(season.Status))
+            {
+                return BadRequest("The status must be unmonitored, wanted, downloading or idle.");
+            }
+
+            statuses.Add(new SonarrSeasonStatus(season.SeriesTmdbId, season.SeasonNumber, season.Status!, season.Mismatch));
+        }
+
+        // Not the request's token: once sent, the report stands even if the client hangs up.
+        await _seasons.ReplaceSonarrStatusAsync(statuses, CancellationToken.None).ConfigureAwait(false);
+        return NoContent();
+    }
+
+    /// <summary>
     /// Sets whether downloads are enabled, per media type. The discovery app sets it at startup, each true only when
     /// its download configuration for that type is complete: <c>Enabled</c> for films, <c>SeriesEnabled</c> for shows.
     /// While one is off, discovery titles of that type offer no Download. Both are off until first set; a missing
@@ -585,8 +707,9 @@ public partial class DiscoveryController : BaseJellyfinApiController
 
     /// <summary>
     /// Gets the titles the discovery app must never delete: the ones saved in anyone's list, and the ones with a
-    /// download request that isn't done (failed ones included). Requests whose title is now in a library are marked
-    /// done first. <c>Items</c> has every type; <c>TmdbIds</c> keeps the films only, for apps that know no types.
+    /// download request that isn't done (failed ones included), and the shows with a pending season request. Requests
+    /// whose title is now in a library are marked done first. <c>Items</c> has every type; <c>TmdbIds</c> keeps the films
+    /// only, for apps that know no types.
     /// </summary>
     /// <param name="cancellationToken">The cancellation token.</param>
     /// <response code="200">Titles returned.</response>
@@ -597,11 +720,17 @@ public partial class DiscoveryController : BaseJellyfinApiController
     {
         var all = await _requests.GetAllAsync(null, cancellationToken).ConfigureAwait(false);
         var current = await DiscoveryRequestDone.CheckAllAsync(_requests, _filmSync, all.Where(r => r.IsActive), cancellationToken).ConfigureAwait(false);
+        var pendingSeasons = await _seasons.GetPendingAsync(cancellationToken).ConfigureAwait(false);
         var items = new List<DiscoveryProtectedItemDto>();
         foreach (var type in Enum.GetValues<DiscoveryMediaType>())
         {
             var saved = await _userLists.GetListedTmdbIdsAsync(type, cancellationToken).ConfigureAwait(false);
             var requested = current.Where(r => r.IsActive && r.Type == type).Select(r => r.TmdbId);
+            if (type == DiscoveryMediaType.Series)
+            {
+                requested = requested.Concat(pendingSeasons.Select(r => r.SeriesTmdbId));
+            }
+
             items.AddRange(saved.Concat(requested).Distinct().Order().Select(id => new DiscoveryProtectedItemDto(id, type)));
         }
 

@@ -17,6 +17,11 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
     public const string MigrationsHistoryTableName = "__CustomMigrationsHistory";
 
     /// <summary>
+    /// The longest failure reason a season request keeps.
+    /// </summary>
+    public const int SeasonRequestReasonMaxLength = 1000;
+
+    /// <summary>
     /// Gets the per user home row layouts.
     /// </summary>
     public DbSet<CustomHomeRowConfiguration> HomeRowConfigurations => Set<CustomHomeRowConfiguration>();
@@ -75,6 +80,16 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
     /// Gets the server-wide discovery settings.
     /// </summary>
     public DbSet<CustomDiscoverySetting> DiscoverySettings => Set<CustomDiscoverySetting>();
+
+    /// <summary>
+    /// Gets the season requests of shows.
+    /// </summary>
+    public DbSet<CustomSeasonRequest> SeasonRequests => Set<CustomSeasonRequest>();
+
+    /// <summary>
+    /// Gets the Sonarr season statuses the discovery app reports.
+    /// </summary>
+    public DbSet<CustomSonarrSeasonStatus> SonarrSeasonStatuses => Set<CustomSonarrSeasonStatus>();
 
     /// <inheritdoc />
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -180,6 +195,26 @@ public class CustomDbContext(DbContextOptions<CustomDbContext> options) : DbCont
             entity.ToTable("CustomDiscoverySettings");
             entity.HasKey(e => e.Key);
             entity.Property(e => e.Key).HasMaxLength(100).ValueGeneratedNever();
+        });
+
+        modelBuilder.Entity<CustomSeasonRequest>(entity =>
+        {
+            entity.ToTable("CustomSeasonRequests");
+            entity.HasKey(e => new { e.SeriesTmdbId, e.SeasonNumber });
+            entity.Property(e => e.SeriesTmdbId).ValueGeneratedNever();
+            entity.Property(e => e.SeasonNumber).ValueGeneratedNever();
+            entity.Property(e => e.State).HasMaxLength(32);
+            entity.Property(e => e.Reason).HasMaxLength(SeasonRequestReasonMaxLength);
+            entity.HasIndex(e => e.State);
+        });
+
+        modelBuilder.Entity<CustomSonarrSeasonStatus>(entity =>
+        {
+            entity.ToTable("CustomSonarrSeasonStatus");
+            entity.HasKey(e => new { e.SeriesTmdbId, e.SeasonNumber });
+            entity.Property(e => e.SeriesTmdbId).ValueGeneratedNever();
+            entity.Property(e => e.SeasonNumber).ValueGeneratedNever();
+            entity.Property(e => e.Status).HasMaxLength(32);
         });
     }
 
