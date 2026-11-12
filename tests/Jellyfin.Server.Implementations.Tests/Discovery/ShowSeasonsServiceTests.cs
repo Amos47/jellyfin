@@ -116,6 +116,22 @@ public class ShowSeasonsServiceTests
     }
 
     [Fact]
+    public async Task TmdbIgnoresToken_PageStillLoadsWithinCap()
+    {
+        AddLibrary(1, 3);
+
+        // A source that never finishes and never looks at its token (as TMDB's client config fetch doesn't).
+        var never = new TaskCompletionSource<IReadOnlyList<TmdbSeason>?>();
+        _tmdb.Setup(t => t.GetSeasonsAsync(Show, It.IsAny<string?>(), It.IsAny<string?>(), It.IsAny<CancellationToken>()))
+            .Returns(never.Task);
+
+        var page = await Create(TimeSpan.FromMilliseconds(50)).GetPageAsync(_user, Series(Show), Ct).WaitAsync(TimeSpan.FromSeconds(5), Ct);
+
+        Assert.False(page.CanGetSeries);
+        Assert.Equal(SeasonView.StateOnServer, Assert.Single(page.Seasons).State);
+    }
+
+    [Fact]
     public async Task NoTmdbId_LibraryOnly_TmdbNotAsked()
     {
         AddLibrary(1, 3);

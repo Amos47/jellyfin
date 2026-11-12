@@ -231,7 +231,9 @@ public sealed class ShowSeasonsService : IShowSeasonsService
         timeout.CancelAfter(_tmdbTimeout);
         try
         {
-            return await _tmdb.GetSeasonsAsync(tmdbId, language, countryCode, timeout.Token).ConfigureAwait(false);
+            // WaitAsync holds the cap even when the source ignores the token (TmdbClientManager's client config fetch
+            // takes none).
+            return await _tmdb.GetSeasonsAsync(tmdbId, language, countryCode, timeout.Token).WaitAsync(timeout.Token).ConfigureAwait(false);
         }
         catch (Exception ex) when (!ct.IsCancellationRequested)
         {
