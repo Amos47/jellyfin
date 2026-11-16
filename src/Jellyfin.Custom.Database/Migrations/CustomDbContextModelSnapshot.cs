@@ -226,6 +226,60 @@ namespace Jellyfin.Custom.Database.Migrations
                     b.ToTable("CustomMarkers", (string)null);
                 });
 
+            modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomSeasonRequest", b =>
+                {
+                    b.Property<int>("SeriesTmdbId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("SeasonNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Reason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("State")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.Property<Guid>("UserId")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("SeriesTmdbId", "SeasonNumber");
+
+                    b.HasIndex("State");
+
+                    b.ToTable("CustomSeasonRequests", (string)null);
+                });
+
+            modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomSonarrSeasonStatus", b =>
+                {
+                    b.Property<int>("SeriesTmdbId")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<int>("SeasonNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<bool>("Mismatch")
+                        .HasColumnType("INTEGER");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(32)
+                        .HasColumnType("TEXT");
+
+                    b.Property<DateTime>("UpdatedAt")
+                        .HasColumnType("TEXT");
+
+                    b.HasKey("SeriesTmdbId", "SeasonNumber");
+
+                    b.ToTable("CustomSonarrSeasonStatus", (string)null);
+                });
+
             modelBuilder.Entity("Jellyfin.Custom.Database.Entities.CustomUserList", b =>
                 {
                     b.Property<Guid>("Id")

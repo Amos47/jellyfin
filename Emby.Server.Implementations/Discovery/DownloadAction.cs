@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations.Entities;
 using MediaBrowser.Controller.Discovery;
 using MediaBrowser.Controller.Entities;
 using MediaBrowser.Controller.Entities.Movies;
+using MediaBrowser.Controller.Entities.TV;
 using MediaBrowser.Model.Entities;
 
 namespace Emby.Server.Implementations.Discovery;
@@ -20,6 +22,16 @@ namespace Emby.Server.Implementations.Discovery;
 /// <see cref="StateRequested"/> or <see cref="StateDownloading"/>, disabled for everyone (anyone else uses Save).
 /// Posting it adds the user as a requester, records the request and saves the film to that user's Saved. The action
 /// never says who asked. The server never calls Radarr: the app picks requests up.
+/// <para>
+/// On a show (virtual or in a library) it is "Get series": offered while the show page
+/// (<see cref="IShowSeasonsService"/>) has a season to get, or a season on its way. Its state follows the seasons:
+/// while any season can be got, <see cref="StateFailed"/> if one of those last failed, else
+/// <see cref="StateAvailable"/> (both enabled); with none left to get, <see cref="StateDownloading"/> if any is
+/// downloading, else <see cref="StateRequested"/> (both disabled). A virtual show's series request (older apps) only
+/// counts while the show has no season requests. Posting it requests
+/// every season that can be got; on a virtual discovery show it also makes today's series request and saves the show,
+/// so older apps keep working.
+/// </para>
 /// </summary>
 public sealed class DownloadAction : IItemActionProvider
 {
@@ -56,9 +68,18 @@ public sealed class DownloadAction : IItemActionProvider
         [StateDownloading] = "Downloading",
     };
 
+    private static readonly IReadOnlyDictionary<string, string> _seriesLabels = new Dictionary<string, string>
+    {
+        [StateAvailable] = "Get series",
+        [StateFailed] = "Retry",
+        [StateRequested] = "Requested",
+        [StateDownloading] = "Getting…",
+    };
+
     private readonly IDiscoveryRequestStore _requests;
     private readonly IUserListStore _lists;
     private readonly IDiscoveryFilmSync _filmSync;
+    private readonly IShowSeasonsService _showSeasons;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DownloadAction"/> class.
@@ -66,11 +87,13 @@ public sealed class DownloadAction : IItemActionProvider
     /// <param name="requests">The download request store.</param>
     /// <param name="lists">The user list store, to save a requested film.</param>
     /// <param name="filmSync">The discovery film sync, to tell a discovery film and an owned one.</param>
-    public DownloadAction(IDiscoveryRequestStore requests, IUserListStore lists, IDiscoveryFilmSync filmSync)
+    /// <param name="showSeasons">The show page service, for a show's seasons.</param>
+    public DownloadAction(IDiscoveryRequestStore requests, IUserListStore lists, IDiscoveryFilmSync filmSync, IShowSeasonsService showSeasons)
     {
         _requests = requests;
         _lists = lists;
         _filmSync = filmSync;
+        _showSeasons = showSeasons;
     }
 
     /// <inheritdoc />
@@ -81,6 +104,11 @@ public sealed class DownloadAction : IItemActionProvider
     {
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(item);
+
+        if (item is Series series)
+        {
+            return await GetSeriesActionAsync(user, series, cancellationToken).ConfigureAwait(false);
+        }
 
         if (GetDiscoveryTmdbId(item) is not { } title
             || !await GetDownloadsEnabledAsync(title.Type, cancellationToken).ConfigureAwait(false))
@@ -110,6 +138,11 @@ public sealed class DownloadAction : IItemActionProvider
     {
         ArgumentNullException.ThrowIfNull(user);
         ArgumentNullException.ThrowIfNull(item);
+
+        if (item is Series series)
+        {
+            return await PerformSeriesAsync(user, series, cancellationToken).ConfigureAwait(false);
+        }
 
         if (GetDiscoveryTmdbId(item) is not { } title)
         {
@@ -145,6 +178,86 @@ public sealed class DownloadAction : IItemActionProvider
             cancellationToken).ConfigureAwait(false);
 
         return request is null ? null : Create(request.State);
+    }
+
+    // Get series: null when the show has nothing to get and nothing on its way.
+    private async Task<ItemAction?> GetSeriesActionAsync(User user, Series series, CancellationToken cancellationToken)
+    {
+        if (!await _requests.GetDownloadsEnabledAsync(DiscoveryMediaType.Series, cancellationToken).ConfigureAwait(false))
+        {
+            return null;
+        }
+
+        // A virtual discovery show keeps its series request (older apps) and goes once the show is in a library: the
+        // library show's page carries Get series from then on.
+        DiscoveryRequest? seriesRequest = null;
+        if (GetDiscoveryTmdbId(series) is { } title)
+        {
+            seriesRequest = await _requests.GetAsync(title.TmdbId, DiscoveryMediaType.Series, cancellationToken).ConfigureAwait(false);
+            if (DiscoveryRequestDone.IsOwned(_filmSync, title.TmdbId, DiscoveryMediaType.Series))
+            {
+                await DiscoveryRequestDone.CheckAsync(_requests, _filmSync, seriesRequest, cancellationToken).ConfigureAwait(false);
+                return null;
+            }
+        }
+
+        var page = await _showSeasons.GetPageAsync(user, series, cancellationToken).ConfigureAwait(false);
+        return CreateSeries(page, seriesRequest?.State);
+    }
+
+    private async Task<ItemAction?> PerformSeriesAsync(User user, Series series, CancellationToken cancellationToken)
+    {
+        if (await GetSeriesActionAsync(user, series, cancellationToken).ConfigureAwait(false) is not { } current)
+        {
+            return null;
+        }
+
+        // Requested, downloading: nothing to do, the button is disabled. Answer with the current state.
+        if (current.Enabled != true)
+        {
+            return current;
+        }
+
+        var discovery = GetDiscoveryTmdbId(series) is not null;
+        var result = await _showSeasons.GetSeasonsAsync(user, series, null, requestDiscoverySeries: discovery, cancellationToken).ConfigureAwait(false);
+        return result == ShowSeasonsGetResult.Requested
+            ? await GetSeriesActionAsync(user, series, cancellationToken).ConfigureAwait(false)
+            : null;
+    }
+
+    private static ItemAction? CreateSeries(ShowSeasonsPage page, string? seriesRequestState)
+    {
+        // Once the show has season requests, the seasons decide; the series request older apps made only counts
+        // without them.
+        var legacy = page.HasSeasonRequests ? null : seriesRequestState;
+        var downloading = page.Seasons.Any(s => s.State == SeasonView.StateDownloading);
+        var requested = page.Seasons.Any(s => s.State == SeasonView.StateRequested);
+        string state;
+        if (legacy is DiscoveryRequest.StateDownloading or DiscoveryRequest.StateRequested)
+        {
+            state = legacy == DiscoveryRequest.StateDownloading || downloading ? StateDownloading : StateRequested;
+        }
+        else if (page.CanGetSeries)
+        {
+            // A season can be got: Get series stays available, whatever the other seasons are doing.
+            var failed = legacy == DiscoveryRequest.StateFailed || page.Seasons.Any(s => s.CanGet && s.RequestFailed);
+            state = failed ? StateFailed : StateAvailable;
+        }
+        else if (downloading || requested)
+        {
+            state = downloading ? StateDownloading : StateRequested;
+        }
+        else
+        {
+            return null;
+        }
+
+        return new ItemAction(ActionId, _seriesLabels[state], "download", ItemAction.RequestKind)
+        {
+            State = state,
+            Labels = _seriesLabels,
+            Enabled = state is StateAvailable or StateFailed,
+        };
     }
 
     // No request, or a done one (its film left the library again): Download. A failed one: Retry download. Both

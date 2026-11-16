@@ -121,6 +121,8 @@ namespace Jellyfin.Server.Integration.Tests
                     .AddSingleton<IStartupLogger, NullStartupLogger<object>>()
                     .AddTransient(typeof(IStartupLogger<>), typeof(NullStartupLogger<>))
                     .AddSingleton<IDiscoveryMetadataRefresher, NoOpDiscoveryMetadataRefresher>() // Fork: discovery, no TMDB calls in tests
+                    .AddSingleton<Discovery.FakeTmdbSeasonSource>() // Fork: show seasons, no TMDB calls in tests
+                    .AddSingleton<ITmdbSeasonSource>(sp => sp.GetRequiredService<Discovery.FakeTmdbSeasonSource>()) // Fork: show seasons
                     .AddSingleton(e));
         }
 

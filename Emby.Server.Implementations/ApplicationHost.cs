@@ -609,6 +609,9 @@ namespace Emby.Server.Implementations
             serviceCollection.AddScoped<MediaBrowser.Controller.Events.IEventConsumer<Jellyfin.Data.Events.Users.UserDeletedEventArgs>, UserListsUserDeletedConsumer>(); // Fork: discovery
             serviceCollection.AddSingleton<IItemActionProvider, SaveAction>(); // Fork: discovery
             serviceCollection.AddSingleton<IDiscoveryRequestStore, DiscoveryRequestStore>(); // Fork: discovery
+            serviceCollection.AddSingleton<ISeasonStore, SeasonStore>(); // Fork: show seasons
+            serviceCollection.AddSingleton<ITmdbSeasonSource, TmdbSeasonSource>(); // Fork: show seasons
+            serviceCollection.AddSingleton<IShowSeasonsService, ShowSeasonsService>(); // Fork: show seasons
             serviceCollection.AddSingleton<IItemActionProvider, DownloadAction>(); // Fork: discovery
             serviceCollection.AddSingleton<IRewatchCandidateFinder, RewatchCandidateFinder>();
             serviceCollection.AddSingleton<ITVSeriesManager, TVSeriesManager>();
